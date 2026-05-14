@@ -5,6 +5,7 @@
 	var cfg         = mvdWaiCtrl;
 	var pollTimer   = null;
 	var startBtn    = null;
+	var resetBtn    = null;
 	var progressDiv = null;
 	var progressBar = null;
 	var progressLbl = null;
@@ -13,6 +14,7 @@
 
 	document.addEventListener( 'DOMContentLoaded', function () {
 		startBtn    = document.getElementById( 'mvd-wai-ctrl-start-btn' );
+		resetBtn    = document.getElementById( 'mvd-wai-ctrl-reset-btn' );
 		progressDiv = document.getElementById( 'mvd-wai-ctrl-progress' );
 		progressBar = document.getElementById( 'mvd-wai-ctrl-progress-bar' );
 		progressLbl = document.getElementById( 'mvd-wai-ctrl-progress-label' );
@@ -21,6 +23,10 @@
 
 		if ( startBtn ) {
 			startBtn.addEventListener( 'click', onStartClick );
+		}
+
+		if ( resetBtn ) {
+			resetBtn.addEventListener( 'click', onResetClick );
 		}
 
 		// Se al caricamento la pagina mostra il blocco progresso (status=running),
@@ -52,6 +58,35 @@
 				startBtn.disabled    = false;
 				startBtn.textContent = refreshButtonLabel();
 				showToast( err || cfg.i18n.error, 'error' );
+			}
+		);
+	}
+
+	/**
+	 * Gestisce il click sul pulsante di reset stato bloccato.
+	 */
+	function onResetClick() {
+		if ( ! window.confirm( 'Sbloccare lo stato e resettare l\'importazione in corso? Usare solo se il processo si è bloccato.' ) ) {
+			return;
+		}
+
+		ajaxPost(
+			'mvd_wai_ctrl_reset',
+			cfg.nonceReset,
+			function () {
+				stopPolling();
+				showProgress( false );
+				if ( startBtn ) {
+					startBtn.disabled    = false;
+					startBtn.textContent = refreshButtonLabel();
+				}
+				if ( resetBtn ) {
+					resetBtn.style.display = 'none';
+				}
+				showToast( 'Stato resettato. Puoi avviare una nuova importazione.', 'success' );
+			},
+			function ( err ) {
+				showToast( err || 'Errore durante il reset.', 'error' );
 			}
 		);
 	}
@@ -126,11 +161,14 @@
 			lastMsg.textContent = state.last_message || '';
 		}
 
-		// Aggiorna stato pulsante.
+		// Aggiorna stato pulsanti.
 		if ( startBtn ) {
 			var isRunning = 'running' === status;
 			startBtn.disabled    = isRunning;
 			startBtn.textContent = isRunning ? cfg.i18n.running : refreshButtonLabel();
+		}
+		if ( resetBtn ) {
+			resetBtn.style.display = ( 'running' === status ) ? '' : 'none';
 		}
 
 		// Aggiorna tabella storico.

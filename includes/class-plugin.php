@@ -25,6 +25,7 @@ class MvdWaiCtrlPlugin {
 		// Handler AJAX (solo utenti loggati).
 		add_action( 'wp_ajax_mvd_wai_ctrl_start',  [ __CLASS__, 'ajaxStart' ] );
 		add_action( 'wp_ajax_mvd_wai_ctrl_status', [ __CLASS__, 'ajaxStatus' ] );
+		add_action( 'wp_ajax_mvd_wai_ctrl_reset',  [ __CLASS__, 'ajaxReset' ] );
 
 		// Hook cron one-time (fallback nel caso il loopback non sia disponibile).
 		add_action( MVD_WAI_CTRL_CRON_HOOK, [ 'MvdWaiCtrlRunner', 'runChain' ] );
@@ -86,6 +87,7 @@ class MvdWaiCtrlPlugin {
 				'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
 				'nonceStart'   => wp_create_nonce( 'mvd_wai_ctrl_start' ),
 				'nonceStatus'  => wp_create_nonce( 'mvd_wai_ctrl_status' ),
+				'nonceReset'   => wp_create_nonce( 'mvd_wai_ctrl_reset' ),
 				'pollInterval' => 3000,
 				'i18n'         => [
 					'starting'   => __( 'Avvio in corso...', 'mvd-wai-ctrl' ),
@@ -192,6 +194,25 @@ class MvdWaiCtrlPlugin {
 
 		MvdWaiCtrlRunner::runChain();
 		wp_die();
+	}
+
+	/**
+	 * Handler AJAX per sbloccare manualmente uno stato "running" bloccato.
+	 *
+	 * @return void
+	 */
+	public static function ajaxReset(): void {
+		check_ajax_referer( 'mvd_wai_ctrl_reset' );
+
+		if ( ! current_user_can( MVD_WAI_CTRL_CAPABILITY ) ) {
+			wp_send_json_error( [ 'message' => __( 'Permesso negato.', 'mvd-wai-ctrl' ) ], 403 );
+		}
+
+		delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+		delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
+		MvdWaiCtrlState::reset();
+
+		wp_send_json_success( [ 'message' => __( 'Stato resettato.', 'mvd-wai-ctrl' ) ] );
 	}
 
 	/**

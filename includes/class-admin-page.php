@@ -80,6 +80,16 @@ class MvdWaiCtrlAdminPage {
 							<?php esc_html_e( 'Avvia importazione sequenziale', 'mvd-wai-ctrl' ); ?>
 						<?php endif; ?>
 					</button>
+
+					<?php if ( $is_running ) : ?>
+						<button
+							id="mvd-wai-ctrl-reset-btn"
+							class="button button-secondary"
+							style="margin-left:12px; color:#b32d2e;"
+						>
+							<?php esc_html_e( 'Sblocca (reset stato)', 'mvd-wai-ctrl' ); ?>
+						</button>
+					<?php endif; ?>
 				</div>
 			</div>
 
