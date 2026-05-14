@@ -30,7 +30,7 @@ define( 'MVD_WAI_CTRL_CAPABILITY',    'manage_options' );
  *
  * Sostituire i valori con gli ID reali visibili in All Import → Manage Imports.
  */
-define( 'MVD_WAI_CTRL_IDS', [ 1, 2, 3, 4 ] );
+define( 'MVD_WAI_CTRL_IDS', [ 13, 2, 1, 14 ] );
 
 // ── Autoload classi ────────────────────────────────────────────────────────────
 
