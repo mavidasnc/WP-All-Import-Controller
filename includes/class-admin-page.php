@@ -53,7 +53,7 @@ class MvdWaiCtrlAdminPage {
 				<ol class="mvd-wai-ctrl-import-list">
 					<?php foreach ( $import_ids as $step => $id ) : ?>
 						<li>
-							<span class="mvd-wai-ctrl-step-num"><?php echo esc_html( $step + 1 ); ?></span>
+							<span class="mvd-wai-ctrl-step-num"><?php echo esc_html( (string) ( $step + 1 ) ); ?></span>
 							<span class="mvd-wai-ctrl-import-name">
 								<?php
 								if ( $pmxi_active && isset( $import_names[ $id ] ) ) {
@@ -89,7 +89,7 @@ class MvdWaiCtrlAdminPage {
 					<div
 						id="mvd-wai-ctrl-progress-bar"
 						class="mvd-wai-ctrl-progress-bar"
-						style="width: <?php echo esc_attr( self::progressPercent( $state ) ); ?>%"
+						style="width: <?php echo esc_attr( (string) self::progressPercent( $state ) ); ?>%"
 					></div>
 				</div>
 				<p id="mvd-wai-ctrl-progress-label" class="mvd-wai-ctrl-progress-label">

@@ -1,0 +1,15 @@
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 5
+
+    paths:
+        - includes
+        - mvd-wp-all-import-controller.php
+
+    bootstrapFiles:
+        - tests/phpstan-bootstrap.php
+
+    scanFiles:
+        - tests/stubs/pmxi-stubs.php

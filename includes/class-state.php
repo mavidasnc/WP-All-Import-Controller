@@ -53,7 +53,7 @@ class MvdWaiCtrlState {
 	 */
 	public static function save( array $state ): void {
 		$state['updated_at'] = current_time( 'mysql' );
-		update_option( MVD_WAI_CTRL_STATE_OPTION, $state, 'no' );
+		update_option( MVD_WAI_CTRL_STATE_OPTION, $state, false );
 	}
 
 	/**
