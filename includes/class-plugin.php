@@ -26,8 +26,11 @@ class MvdWaiCtrlPlugin {
 		add_action( 'wp_ajax_mvd_wai_ctrl_start',  [ __CLASS__, 'ajaxStart' ] );
 		add_action( 'wp_ajax_mvd_wai_ctrl_status', [ __CLASS__, 'ajaxStatus' ] );
 
-		// Hook cron one-time.
+		// Hook cron one-time (fallback nel caso il loopback non sia disponibile).
 		add_action( MVD_WAI_CTRL_CRON_HOOK, [ 'MvdWaiCtrlRunner', 'runChain' ] );
+
+		// Endpoint loopback per esecuzione in contesto admin (is_admin() = true garantito).
+		add_action( 'wp_ajax_nopriv_mvd_wai_ctrl_run_chain', [ __CLASS__, 'ajaxRunChain' ] );
 	}
 
 	/**
@@ -129,12 +132,34 @@ class MvdWaiCtrlPlugin {
 		// Crea la riga di apertura nel log e ottieni il run_id.
 		$run_id = MvdWaiCtrlLogger::createRun();
 
-		// Salva lo stato 'running' prima di schedulare il cron.
+		// Salva lo stato 'running' prima di avviare il runner.
 		MvdWaiCtrlState::startRun( $run_id );
 
-		// Schedula l'esecuzione asincrona e forza l'avvio immediato del cron.
-		wp_schedule_single_event( time() - 1, MVD_WAI_CTRL_CRON_HOOK );
-		spawn_cron();
+		// Token monouso per autenticare il loopback (TTL 60 sec).
+		$secret = wp_generate_password( 32, false );
+		set_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret', $secret, MINUTE_IN_SECONDS );
+
+		// Richiesta loopback non-bloccante verso admin-ajax: garantisce is_admin() = true
+		// affinché WP All Import Pro carichi PMXI_Import_Record (classe admin-only).
+		$loopback_sent = wp_remote_post(
+			admin_url( 'admin-ajax.php' ),
+			[
+				'body'      => [
+					'action' => 'mvd_wai_ctrl_run_chain',
+					'secret' => $secret,
+				],
+				'blocking'  => false,
+				'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
+				'timeout'   => 0.01,
+			]
+		);
+
+		// Fallback cron nel caso in cui il loopback non sia disponibile nel server.
+		if ( is_wp_error( $loopback_sent ) ) {
+			delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
+			wp_schedule_single_event( time() - 1, MVD_WAI_CTRL_CRON_HOOK );
+			spawn_cron();
+		}
 
 		wp_send_json_success(
 			[
@@ -142,6 +167,28 @@ class MvdWaiCtrlPlugin {
 				'message' => __( 'Importazione sequenziale avviata.', 'mvd-wai-ctrl' ),
 			]
 		);
+	}
+
+	/**
+	 * Handler del loopback interno che esegue la catena di importazioni.
+	 *
+	 * Registrato su wp_ajax_nopriv per essere chiamato dal server stesso via wp_remote_post.
+	 * La richiesta è autenticata con un token monouso anziché con sessione utente.
+	 *
+	 * @return void
+	 */
+	public static function ajaxRunChain(): void {
+		$secret = sanitize_text_field( wp_unslash( $_POST['secret'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		$stored = get_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
+
+		if ( ! $stored || ! hash_equals( $stored, $secret ) ) {
+			wp_die( '', '', [ 'response' => 403 ] );
+		}
+
+		delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
+
+		MvdWaiCtrlRunner::runChain();
+		wp_die();
 	}
 
 	/**

@@ -39,6 +39,8 @@ class MvdWaiCtrlRunner {
 		}
 
 		// Verifica che WP All Import Pro sia disponibile.
+		// Normalmente garantito dal loopback (admin-ajax, is_admin() = true).
+		// Se il runner è stato invocato via cron di fallback, PMXI potrebbe non essere caricato.
 		if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 			MvdWaiCtrlState::finishRun( 'error', __( 'WP All Import Pro non è attivo o la classe PMXI_Import_Record non è disponibile.', 'mvd-wai-ctrl' ) );
 			delete_transient( MVD_WAI_CTRL_LOCK_KEY );
