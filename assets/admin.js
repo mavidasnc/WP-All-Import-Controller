@@ -1,0 +1,305 @@
+/* global mvdWaiCtrl */
+( function () {
+	'use strict';
+
+	var cfg         = mvdWaiCtrl;
+	var pollTimer   = null;
+	var startBtn    = null;
+	var progressDiv = null;
+	var progressBar = null;
+	var progressLbl = null;
+	var lastMsg     = null;
+	var toast       = null;
+
+	document.addEventListener( 'DOMContentLoaded', function () {
+		startBtn    = document.getElementById( 'mvd-wai-ctrl-start-btn' );
+		progressDiv = document.getElementById( 'mvd-wai-ctrl-progress' );
+		progressBar = document.getElementById( 'mvd-wai-ctrl-progress-bar' );
+		progressLbl = document.getElementById( 'mvd-wai-ctrl-progress-label' );
+		lastMsg     = document.getElementById( 'mvd-wai-ctrl-last-msg' );
+		toast       = document.getElementById( 'mvd-wai-ctrl-toast' );
+
+		if ( startBtn ) {
+			startBtn.addEventListener( 'click', onStartClick );
+		}
+
+		// Se al caricamento la pagina mostra il blocco progresso (status=running),
+		// riavvia il polling automaticamente.
+		if ( progressDiv && progressDiv.style.display !== 'none' ) {
+			startPolling();
+		}
+	} );
+
+	/**
+	 * Gestisce il click sul pulsante di avvio.
+	 */
+	function onStartClick() {
+		if ( ! window.confirm( cfg.i18n.confirmRun ) ) {
+			return;
+		}
+
+		startBtn.disabled    = true;
+		startBtn.textContent = cfg.i18n.starting;
+
+		ajaxPost(
+			'mvd_wai_ctrl_start',
+			cfg.nonceStart,
+			function ( data ) {
+				showProgress( true );
+				startPolling();
+			},
+			function ( err ) {
+				startBtn.disabled    = false;
+				startBtn.textContent = refreshButtonLabel();
+				showToast( err || cfg.i18n.error, 'error' );
+			}
+		);
+	}
+
+	/**
+	 * Avvia il polling dello stato ogni cfg.pollInterval ms.
+	 */
+	function startPolling() {
+		if ( pollTimer ) {
+			return;
+		}
+		pollTimer = setInterval( pollStatus, cfg.pollInterval );
+		pollStatus(); // Prima chiamata immediata.
+	}
+
+	/**
+	 * Ferma il polling.
+	 */
+	function stopPolling() {
+		if ( pollTimer ) {
+			clearInterval( pollTimer );
+			pollTimer = null;
+		}
+	}
+
+	/**
+	 * Richiede lo stato corrente al server.
+	 */
+	function pollStatus() {
+		ajaxPost(
+			'mvd_wai_ctrl_status',
+			cfg.nonceStatus,
+			function ( data ) {
+				updateUI( data );
+			},
+			function () {
+				// Silenzioso: riprova al prossimo tick.
+			}
+		);
+	}
+
+	/**
+	 * Aggiorna l'intera UI in base ai dati di stato ricevuti.
+	 *
+	 * @param {Object} data Risposta AJAX: { state, runs }.
+	 */
+	function updateUI( data ) {
+		var state = data.state || {};
+
+		var status  = state.status      || 'idle';
+		var current = parseInt( state.step_current, 10 ) || 0;
+		var total   = parseInt( state.step_total, 10 )   || 4;
+		var pct     = total > 0 ? Math.round( ( current / total ) * 100 ) : 0;
+
+		// Aggiorna barra progresso.
+		if ( progressBar ) {
+			progressBar.style.width = pct + '%';
+			progressBar.classList.remove( 'is-error', 'is-completed' );
+			if ( 'error' === status ) {
+				progressBar.classList.add( 'is-error' );
+			} else if ( 'completed' === status ) {
+				progressBar.classList.add( 'is-completed' );
+				progressBar.style.width = '100%';
+			}
+		}
+
+		if ( progressLbl ) {
+			progressLbl.textContent = state.step_label || '';
+		}
+
+		if ( lastMsg ) {
+			lastMsg.textContent = state.last_message || '';
+		}
+
+		// Aggiorna stato pulsante.
+		if ( startBtn ) {
+			var isRunning = 'running' === status;
+			startBtn.disabled    = isRunning;
+			startBtn.textContent = isRunning ? cfg.i18n.running : refreshButtonLabel();
+		}
+
+		// Aggiorna tabella storico.
+		if ( data.runs ) {
+			refreshRunsTable( data.runs );
+		}
+
+		// Gestione stati terminali.
+		if ( 'completed' === status ) {
+			stopPolling();
+			showProgress( false );
+			showToast( cfg.i18n.completed, 'success' );
+		} else if ( 'error' === status ) {
+			stopPolling();
+			showToast( ( state.last_message || cfg.i18n.error ), 'error' );
+		}
+	}
+
+	/**
+	 * Mostra o nasconde il blocco di progresso.
+	 *
+	 * @param {boolean} show
+	 */
+	function showProgress( show ) {
+		if ( progressDiv ) {
+			progressDiv.style.display = show ? '' : 'none';
+		}
+	}
+
+	/**
+	 * Mostra un toast temporaneo.
+	 *
+	 * @param {string} message  Testo del messaggio.
+	 * @param {string} type     'success' o 'error'.
+	 */
+	function showToast( message, type ) {
+		if ( ! toast ) {
+			return;
+		}
+		toast.textContent = message;
+		toast.className   = 'mvd-wai-ctrl-toast is-' + type;
+		toast.style.display = 'block';
+		toast.style.opacity = '1';
+
+		setTimeout( function () {
+			toast.style.opacity = '0';
+			setTimeout( function () {
+				toast.style.display = 'none';
+			}, 300 );
+		}, 5000 );
+	}
+
+	/**
+	 * Aggiorna la tabella dello storico con i dati ricevuti dal server.
+	 *
+	 * @param {Array} runs Array di run objects.
+	 */
+	function refreshRunsTable( runs ) {
+		var container = document.getElementById( 'mvd-wai-ctrl-log-table' );
+		if ( ! container ) {
+			return;
+		}
+		if ( ! runs.length ) {
+			container.innerHTML = '<p>' + escHtml( 'Nessuna esecuzione registrata.' ) + '</p>';
+			return;
+		}
+
+		var html = '<table class="widefat striped mvd-wai-ctrl-runs-table">'
+			+ '<thead><tr>'
+			+ '<th>Run ID</th><th>Avviato il</th><th>Esito</th><th>Passi</th><th>Dettaglio</th>'
+			+ '</tr></thead><tbody>';
+
+		runs.forEach( function ( entry ) {
+			var run   = entry.run   || {};
+			var steps = entry.steps || [];
+			var oc    = run.outcome || 'start';
+			var ocClass = 'start' === oc ? 'mvd-outcome-running' : 'mvd-outcome-' + oc;
+
+			html += '<tr>'
+				+ '<td>' + escHtml( String( run.run_id || '' ) ) + '</td>'
+				+ '<td>' + escHtml( run.created_at || '' ) + '</td>'
+				+ '<td><span class="mvd-wai-ctrl-badge ' + escHtml( ocClass ) + '">' + escHtml( oc ) + '</span></td>'
+				+ '<td>' + escHtml( String( steps.length ) ) + '/4</td>'
+				+ '<td>';
+
+			if ( steps.length ) {
+				html += '<details><summary>Visualizza</summary>'
+					+ '<table class="mvd-wai-ctrl-steps-table">'
+					+ '<tr><th>Passo</th><th>Import ID</th><th>Esito</th><th>Creati</th><th>Aggiornati</th><th>Saltati</th><th>Durata (s)</th></tr>';
+				steps.forEach( function ( step ) {
+					var sOc = step.outcome || '';
+					html += '<tr>'
+						+ '<td>' + escHtml( String( ( parseInt( step.step_index, 10 ) || 0 ) + 1 ) ) + '</td>'
+						+ '<td>' + escHtml( String( step.import_id || '' ) ) + '</td>'
+						+ '<td><span class="mvd-wai-ctrl-badge mvd-outcome-' + escHtml( sOc ) + '">' + escHtml( sOc ) + '</span></td>'
+						+ '<td>' + escHtml( String( step.created   || 0 ) ) + '</td>'
+						+ '<td>' + escHtml( String( step.updated   || 0 ) ) + '</td>'
+						+ '<td>' + escHtml( String( step.skipped   || 0 ) ) + '</td>'
+						+ '<td>' + escHtml( String( step.duration_sec || 0 ) ) + '</td>'
+						+ '</tr>';
+					if ( step.message ) {
+						html += '<tr class="mvd-wai-ctrl-step-msg"><td colspan="7"><pre>' + escHtml( step.message ) + '</pre></td></tr>';
+					}
+				} );
+				html += '</table></details>';
+			}
+
+			html += '</td></tr>';
+		} );
+
+		html += '</tbody></table>';
+		container.innerHTML = html;
+	}
+
+	/**
+	 * Esegue una chiamata POST all'endpoint AJAX di WordPress.
+	 *
+	 * @param {string}   action    Nome dell'action AJAX.
+	 * @param {string}   nonce     Nonce di sicurezza.
+	 * @param {Function} onSuccess Callback invocata con data.data in caso di successo.
+	 * @param {Function} onError   Callback invocata con il messaggio di errore.
+	 */
+	function ajaxPost( action, nonce, onSuccess, onError ) {
+		var body = new URLSearchParams();
+		body.append( 'action',  action );
+		body.append( '_ajax_nonce', nonce );
+
+		fetch( cfg.ajaxUrl, {
+			method:      'POST',
+			credentials: 'same-origin',
+			headers:     { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+			body:        body.toString(),
+		} )
+		.then( function ( res ) {
+			return res.json();
+		} )
+		.then( function ( json ) {
+			if ( json.success ) {
+				onSuccess( json.data );
+			} else {
+				onError( ( json.data && json.data.message ) || '' );
+			}
+		} )
+		.catch( function () {
+			onError( '' );
+		} );
+	}
+
+	/**
+	 * Testo del pulsante quando non è in corso un'esecuzione.
+	 *
+	 * @returns {string}
+	 */
+	function refreshButtonLabel() {
+		return 'Avvia importazione sequenziale';
+	}
+
+	/**
+	 * Effettua l'escape HTML di una stringa.
+	 *
+	 * @param {string} str
+	 * @returns {string}
+	 */
+	function escHtml( str ) {
+		return String( str )
+			.replace( /&/g, '&amp;' )
+			.replace( /</g, '&lt;' )
+			.replace( />/g, '&gt;' )
+			.replace( /"/g, '&quot;' )
+			.replace( /'/g, '&#039;' );
+	}
+}() );

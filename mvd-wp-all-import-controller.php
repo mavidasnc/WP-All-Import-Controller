@@ -1,0 +1,77 @@
+<?php
+/**
+ * Plugin Name:       MVD WP All Import Controller
+ * Plugin URI:        https://github.com/mavidasnc/WP-All-Import-Controller
+ * Description:       Esegue 4 importazioni WP All Import Pro in sequenza con un solo click, stop al primo errore e log persistente.
+ * Version:           1.0.0
+ * Requires at least: 6.0
+ * Requires PHP:      8.1
+ * Author:            Mavida
+ * Author URI:        https://mavida.it
+ * License:           GPL-2.0-or-later
+ * Text Domain:       mvd-wai-ctrl
+ * Domain Path:       /languages
+ */
+
+defined( 'ABSPATH' ) || exit;
+
+// ── Costanti ──────────────────────────────────────────────────────────────────
+
+define( 'MVD_WAI_CTRL_VERSION',       '1.0.0' );
+define( 'MVD_WAI_CTRL_DIR',           plugin_dir_path( __FILE__ ) );
+define( 'MVD_WAI_CTRL_URL',           plugin_dir_url( __FILE__ ) );
+define( 'MVD_WAI_CTRL_CRON_HOOK',     'mvd_wai_ctrl_run' );
+define( 'MVD_WAI_CTRL_STATE_OPTION',  'mvd_wai_ctrl_state' );
+define( 'MVD_WAI_CTRL_LOCK_KEY',      'mvd_wai_ctrl_running_lock' );
+define( 'MVD_WAI_CTRL_CAPABILITY',    'manage_options' );
+
+/**
+ * ID delle importazioni WP All Import Pro da eseguire in ordine.
+ *
+ * Sostituire i valori con gli ID reali visibili in All Import → Manage Imports.
+ */
+define( 'MVD_WAI_CTRL_IDS', [ 1, 2, 3, 4 ] );
+
+// ── Autoload classi ────────────────────────────────────────────────────────────
+
+/**
+ * Autoload semplice delle classi del plugin dalla cartella includes/.
+ *
+ * @param string $class_name Nome della classe da caricare.
+ * @return void
+ */
+function mvd_wai_ctrl_autoload( string $class_name ): void {
+	$prefix = 'MvdWaiCtrl';
+	if ( 0 !== strpos( $class_name, $prefix ) ) {
+		return;
+	}
+	// Converte MvdWaiCtrlMyClass → class-my-class.php
+	$short    = substr( $class_name, strlen( $prefix ) );
+	$filename = 'class' . strtolower( preg_replace( '/([A-Z])/', '-$1', $short ) ) . '.php';
+	$path     = MVD_WAI_CTRL_DIR . 'includes/' . $filename;
+	if ( file_exists( $path ) ) {
+		require_once $path;
+	}
+}
+spl_autoload_register( 'mvd_wai_ctrl_autoload' );
+
+// ── Activation / Deactivation ─────────────────────────────────────────────────
+
+register_activation_hook( __FILE__, [ 'MvdWaiCtrlLogger', 'createTable' ] );
+
+register_deactivation_hook(
+	__FILE__,
+	function (): void {
+		wp_clear_scheduled_hook( MVD_WAI_CTRL_CRON_HOOK );
+	}
+);
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+add_action(
+	'plugins_loaded',
+	function (): void {
+		load_plugin_textdomain( 'mvd-wai-ctrl', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+		MvdWaiCtrlPlugin::init();
+	}
+);

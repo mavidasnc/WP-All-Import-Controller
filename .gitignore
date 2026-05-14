@@ -1,0 +1,14 @@
+# Dipendenze
+vendor/
+node_modules/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json
+
+# Ambienti locali
+*.local
+.env
+.env.*
