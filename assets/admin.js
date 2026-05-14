@@ -137,9 +137,15 @@
 		var state = data.state || {};
 
 		var status  = state.status      || 'idle';
-		var current = parseInt( state.step_current, 10 ) || 0;
-		var total   = parseInt( state.step_total, 10 )   || 4;
-		var pct     = total > 0 ? Math.round( ( current / total ) * 100 ) : 0;
+		var current = parseInt( state.step_current, 10 )        || 0;
+		var total   = parseInt( state.step_total, 10 )          || 4;
+		var chunk   = parseInt( state.current_chunk, 10 )       || 0;
+		var chunks  = parseInt( state.current_total_chunks, 10 ) || 0;
+
+		// Percentuale frazionaria: aggiunge la frazione del chunk corrente per una barra fluida.
+		var frac = ( chunks > 0 && chunk > 0 ) ? Math.min( 1, chunk / chunks ) : 0;
+		var pct  = total > 0 ? Math.round( ( ( current + frac ) / total ) * 100 ) : 0;
+		pct = Math.min( 100, pct );
 
 		// Aggiorna barra progresso.
 		if ( progressBar ) {

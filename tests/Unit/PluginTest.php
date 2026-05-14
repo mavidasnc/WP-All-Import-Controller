@@ -125,7 +125,6 @@ class PluginTest extends TestCase {
 		Functions\when( 'get_transient' )->justReturn( false );
 		Functions\when( 'current_time' )->justReturn( '2024-01-01 00:00:00' );
 		Functions\when( 'update_option' )->justReturn( true );
-		// time() è PHP built-in: non la mocchiamo, wp_schedule_single_event usa il timestamp reale.
 
 		// $wpdb per Logger::createRun().
 		global $wpdb;
@@ -133,6 +132,15 @@ class PluginTest extends TestCase {
 		$wpdb->insert_id = 55;
 		$wpdb->shouldReceive( 'update' )->once()->andReturn( 1 );
 
+		// scheduleSelf() tenta il loopback (wp_remote_post) e cade nel fallback cron.
+		Functions\when( 'wp_generate_password' )->justReturn( 'test-secret' );
+		Functions\when( 'set_transient' )->justReturn( true );
+		Functions\when( 'admin_url' )->justReturn( 'http://localhost/wp-admin/admin-ajax.php' );
+		Functions\when( 'apply_filters' )->justReturn( false );
+		$wp_err = \Mockery::mock( 'WP_Error' );
+		Functions\when( 'wp_remote_post' )->justReturn( $wp_err );
+		Functions\when( 'is_wp_error' )->justReturn( true );
+		Functions\when( 'delete_transient' )->justReturn( true );
 		Functions\expect( 'wp_schedule_single_event' )->once();
 		Functions\expect( 'spawn_cron' )->once();
 

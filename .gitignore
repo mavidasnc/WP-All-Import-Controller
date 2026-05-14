@@ -19,3 +19,7 @@ Thumbs.db
 *.local
 .env
 .env.*
+
+# Plugin di terze parti presenti in locale solo come riferimento
+/wp-all-import-pro/
+/wpml-all-import/

@@ -3,7 +3,7 @@
  * Plugin Name:       MVD WP All Import Controller
  * Plugin URI:        https://github.com/mavidasnc/WP-All-Import-Controller
  * Description:       Esegue 4 importazioni WP All Import Pro in sequenza con un solo click, stop al primo errore e log persistente.
- * Version:           1.0.1
+ * Version:           1.1.0
  * Requires at least: 6.0
  * Requires PHP:      8.1
  * Author:            Mavida
@@ -23,7 +23,7 @@ if ( file_exists( __DIR__ . '/vendor/autoload.php' ) ) {
 
 // ── Costanti ──────────────────────────────────────────────────────────────────
 
-define( 'MVD_WAI_CTRL_VERSION',       '1.0.1' );
+define( 'MVD_WAI_CTRL_VERSION',       '1.1.0' );
 define( 'MVD_WAI_CTRL_DIR',           plugin_dir_path( __FILE__ ) );
 define( 'MVD_WAI_CTRL_URL',           plugin_dir_url( __FILE__ ) );
 define( 'MVD_WAI_CTRL_CRON_HOOK',     'mvd_wai_ctrl_run' );

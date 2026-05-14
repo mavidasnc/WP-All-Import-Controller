@@ -28,7 +28,7 @@ class MvdWaiCtrlPlugin {
 		add_action( 'wp_ajax_mvd_wai_ctrl_reset',  [ __CLASS__, 'ajaxReset' ] );
 
 		// Hook cron one-time (fallback nel caso il loopback non sia disponibile).
-		add_action( MVD_WAI_CTRL_CRON_HOOK, [ 'MvdWaiCtrlRunner', 'runChain' ] );
+		add_action( MVD_WAI_CTRL_CRON_HOOK, [ 'MvdWaiCtrlRunner', 'runStep' ] );
 
 		// Endpoint loopback per esecuzione in contesto admin (is_admin() = true garantito).
 		add_action( 'wp_ajax_nopriv_mvd_wai_ctrl_run_chain', [ __CLASS__, 'ajaxRunChain' ] );
@@ -140,31 +140,11 @@ class MvdWaiCtrlPlugin {
 		// Salva lo stato 'running' prima di avviare il runner.
 		MvdWaiCtrlState::startRun( $run_id );
 
-		// Token monouso per autenticare il loopback (TTL 60 sec).
-		$secret = wp_generate_password( 32, false );
-		set_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret', $secret, MINUTE_IN_SECONDS );
-
-		// Richiesta loopback non-bloccante verso admin-ajax: garantisce is_admin() = true
-		// affinché WP All Import Pro carichi PMXI_Import_Record (classe admin-only).
-		$loopback_sent = wp_remote_post(
-			admin_url( 'admin-ajax.php' ),
-			[
-				'body'      => [
-					'action' => 'mvd_wai_ctrl_run_chain',
-					'secret' => $secret,
-				],
-				'blocking'  => false,
-				'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
-				'timeout'   => 0.01,
-			]
-		);
-
-		// Fallback cron nel caso in cui il loopback non sia disponibile nel server.
-		if ( is_wp_error( $loopback_sent ) ) {
-			delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
-			wp_schedule_single_event( time() - 1, MVD_WAI_CTRL_CRON_HOOK );
-			spawn_cron();
-		}
+		// Schedula il primo step via loopback admin-ajax (garantisce is_admin()=true,
+		// necessario perché WP All Import Pro carichi PMXI_Import_Record).
+		// Fallback automatico su wp_schedule_single_event + spawn_cron se il loopback
+		// non è disponibile (gestito internamente da scheduleSelf).
+		MvdWaiCtrlRunner::scheduleSelf();
 
 		wp_send_json_success(
 			[
@@ -192,7 +172,7 @@ class MvdWaiCtrlPlugin {
 
 		delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
 
-		MvdWaiCtrlRunner::runChain();
+		MvdWaiCtrlRunner::runStep();
 		wp_die();
 	}
 

@@ -185,16 +185,27 @@ class MvdWaiCtrlAdminPage {
 	/**
 	 * Calcola la percentuale di avanzamento in base allo stato corrente.
 	 *
+	 * Quando un import è in corso e il totale chunk è noto, calcola una percentuale
+	 * frazionaria intra-import (es. 37.5% a metà del secondo import su 4).
+	 *
 	 * @param array<string, mixed> $state Stato corrente.
 	 * @return int Percentuale 0-100.
 	 */
 	private static function progressPercent( array $state ): int {
 		$total   = (int) ( $state['step_total']   ?? count( MVD_WAI_CTRL_IDS ) );
 		$current = (int) ( $state['step_current'] ?? 0 );
+		$chunk   = (int) ( $state['current_chunk']        ?? 0 );
+		$chunks  = (int) ( $state['current_total_chunks'] ?? 0 );
+
 		if ( 0 === $total ) {
 			return 0;
 		}
-		return (int) round( ( $current / $total ) * 100 );
+
+		// Aggiunge la frazione del chunk corrente al progresso per una barra fluida.
+		$frac = ( $chunks > 0 && $chunk > 0 ) ? min( 1.0, $chunk / $chunks ) : 0.0;
+		$pct  = ( $current + $frac ) / $total * 100;
+
+		return (int) round( min( 100, $pct ) );
 	}
 
 	/**

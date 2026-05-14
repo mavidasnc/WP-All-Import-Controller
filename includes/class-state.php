@@ -20,15 +20,18 @@ class MvdWaiCtrlState {
 	 */
 	private static function defaultState(): array {
 		return [
-			'status'       => 'idle',
-			'run_id'       => 0,
-			'step_current' => 0,
-			'step_total'   => count( MVD_WAI_CTRL_IDS ),
-			'step_label'   => '',
-			'started_at'   => '',
-			'updated_at'   => '',
-			'finished_at'  => null,
-			'last_message' => '',
+			'status'               => 'idle',
+			'run_id'               => 0,
+			'step_current'         => 0,
+			'step_total'           => count( MVD_WAI_CTRL_IDS ),
+			'step_label'           => '',
+			'current_index'        => 0,
+			'current_chunk'        => 0,
+			'current_total_chunks' => 0,
+			'started_at'           => '',
+			'updated_at'           => '',
+			'finished_at'          => null,
+			'last_message'         => '',
 		];
 	}
 
@@ -85,10 +88,13 @@ class MvdWaiCtrlState {
 			array_merge(
 				self::defaultState(),
 				[
-					'status'     => 'running',
-					'run_id'     => $run_id,
-					'started_at' => current_time( 'mysql' ),
-					'finished_at' => null,
+					'status'               => 'running',
+					'run_id'               => $run_id,
+					'current_index'        => 0,
+					'current_chunk'        => 0,
+					'current_total_chunks' => 0,
+					'started_at'           => current_time( 'mysql' ),
+					'finished_at'          => null,
 				]
 			)
 		);
@@ -108,6 +114,44 @@ class MvdWaiCtrlState {
 		$state['step_label']    = $label;
 		$state['last_message']  = $message;
 		self::save( $state );
+	}
+
+	/**
+	 * Aggiorna le informazioni sui chunk dell'import corrente (per il progresso granulare).
+	 *
+	 * @param int $chunk       Numero chunk corrente (queue_chunk_number da PMXI).
+	 * @param int $total       Totale record dell'import (count da PMXI).
+	 * @return void
+	 */
+	public static function updateChunk( int $chunk, int $total ): void {
+		$state                          = self::get();
+		$state['current_chunk']         = $chunk;
+		$state['current_total_chunks']  = $total;
+		self::save( $state );
+	}
+
+	/**
+	 * Avanza al prossimo import nella sequenza.
+	 *
+	 * Incrementa current_index e resetta i dati di chunk per il nuovo import.
+	 * Ritorna false se la chain è terminata (current_index supera l'ultimo).
+	 *
+	 * @return bool True se esiste un prossimo import, false se la chain è finita.
+	 */
+	public static function advanceToNextImport(): bool {
+		$state      = self::get();
+		$next_index = (int) $state['current_index'] + 1;
+
+		if ( $next_index >= count( MVD_WAI_CTRL_IDS ) ) {
+			return false;
+		}
+
+		$state['current_index']        = $next_index;
+		$state['current_chunk']        = 0;
+		$state['current_total_chunks'] = 0;
+		self::save( $state );
+
+		return true;
 	}
 
 	/**

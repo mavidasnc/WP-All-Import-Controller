@@ -17,9 +17,11 @@ define( 'MVD_WAI_CTRL_LOCK_KEY',     'mvd_wai_ctrl_running_lock' );
 define( 'MVD_WAI_CTRL_CAPABILITY',   'manage_options' );
 define( 'MVD_WAI_CTRL_IDS',          [ 13, 2, 1, 14 ] );
 
-// Costanti WordPress usate da wpdb::get_results().
-defined( 'ARRAY_A' ) || define( 'ARRAY_A', 'ARRAY_A' );
-defined( 'OBJECT' )  || define( 'OBJECT', 'OBJECT' );
+// Costanti WordPress di tempo e altro usate dal plugin e dai test.
+defined( 'ARRAY_A' )           || define( 'ARRAY_A',           'ARRAY_A' );
+defined( 'OBJECT' )            || define( 'OBJECT',            'OBJECT' );
+defined( 'MINUTE_IN_SECONDS' ) || define( 'MINUTE_IN_SECONDS', 60 );
+defined( 'MVD_WAI_CTRL_TOKEN_OPTION' ) || define( 'MVD_WAI_CTRL_TOKEN_OPTION', 'mvd_wai_ctrl_gh_token' );
 
 // Autoload Composer (PHPUnit, Brain Monkey, Mockery).
 require_once dirname( __DIR__ ) . '/vendor/autoload.php';
