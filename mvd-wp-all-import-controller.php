@@ -15,6 +15,12 @@
 
 defined( 'ABSPATH' ) || exit;
 
+// ── Autoload Composer ─────────────────────────────────────────────────────────
+
+if ( file_exists( __DIR__ . '/vendor/autoload.php' ) ) {
+	require_once __DIR__ . '/vendor/autoload.php';
+}
+
 // ── Costanti ──────────────────────────────────────────────────────────────────
 
 define( 'MVD_WAI_CTRL_VERSION',       '1.0.0' );
@@ -24,6 +30,7 @@ define( 'MVD_WAI_CTRL_CRON_HOOK',     'mvd_wai_ctrl_run' );
 define( 'MVD_WAI_CTRL_STATE_OPTION',  'mvd_wai_ctrl_state' );
 define( 'MVD_WAI_CTRL_LOCK_KEY',      'mvd_wai_ctrl_running_lock' );
 define( 'MVD_WAI_CTRL_CAPABILITY',    'manage_options' );
+define( 'MVD_WAI_CTRL_TOKEN_OPTION',  'mvd_wai_ctrl_gh_token' );
 
 /**
  * ID delle importazioni WP All Import Pro da eseguire in ordine.
@@ -73,5 +80,36 @@ add_action(
 	function (): void {
 		load_plugin_textdomain( 'mvd-wai-ctrl', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 		MvdWaiCtrlPlugin::init();
+	}
+);
+
+// ── Updater GitHub ─────────────────────────────────────────────────────────────
+
+add_action(
+	'init',
+	function (): void {
+		if ( ! class_exists( 'YahnisElsts\PluginUpdateChecker\v5\PucFactory' ) ) {
+			return;
+		}
+
+		$checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+			'https://github.com/mavidasnc/WP-All-Import-Controller/',
+			__FILE__,
+			'mvd-wp-all-import-controller'
+		);
+
+		// Priorità: costante wp-config.php → option salvata nell'admin del plugin.
+		$token = '';
+		if ( defined( 'MVD_WAI_CTRL_GH_TOKEN' ) && MVD_WAI_CTRL_GH_TOKEN ) {
+			$token = MVD_WAI_CTRL_GH_TOKEN;
+		} elseif ( $opt = get_option( MVD_WAI_CTRL_TOKEN_OPTION, '' ) ) {
+			$token = $opt;
+		}
+		if ( $token ) {
+			$checker->setAuthentication( $token );
+		}
+
+		// Scarica lo zip allegato alla GitHub Release (non lo zip auto-generato dal tag).
+		$checker->getVcsApi()->enableReleaseAssets();
 	}
 );

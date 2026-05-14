@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Install production dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress --no-dev --optimize-autoloader
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build zip
+        run: |
+          PLUGIN_SLUG="mvd-wp-all-import-controller"
+          ZIP_NAME="${PLUGIN_SLUG}-${{ steps.version.outputs.version }}.zip"
+
+          mkdir -p "/tmp/${PLUGIN_SLUG}"
+
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='tests' \
+            --exclude='vendor/bin' \
+            --exclude='composer.json' \
+            --exclude='composer.lock' \
+            --exclude='phpunit.xml.dist' \
+            --exclude='phpstan.neon.dist' \
+            --exclude='.wp-env.json' \
+            --exclude='*.zip' \
+            ./ "/tmp/${PLUGIN_SLUG}/"
+
+          cd /tmp
+          zip -r "$ZIP_NAME" "${PLUGIN_SLUG}/"
+          echo "ZIP_PATH=/tmp/${ZIP_NAME}" >> "$GITHUB_ENV"
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release and upload zip
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_PATH }}
+          name: "v${{ steps.version.outputs.version }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

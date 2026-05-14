@@ -106,6 +106,68 @@ class MvdWaiCtrlAdminPage {
 					<?php self::renderRunsTable( $runs ); ?>
 				</div>
 			</div>
+
+			<?php self::renderSettingsForm(); ?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Renderizza il form di impostazioni (token GitHub per gli aggiornamenti automatici).
+	 *
+	 * @return void
+	 */
+	private static function renderSettingsForm(): void {
+		$token_saved    = (bool) get_option( MVD_WAI_CTRL_TOKEN_OPTION, '' );
+		$token_constant = defined( 'MVD_WAI_CTRL_GH_TOKEN' ) && MVD_WAI_CTRL_GH_TOKEN;
+		$updated        = isset( $_GET['settings-updated'] ) && '1' === $_GET['settings-updated']; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		?>
+		<div class="mvd-wai-ctrl-card">
+			<h2><?php esc_html_e( 'Impostazioni aggiornamenti', 'mvd-wai-ctrl' ); ?></h2>
+
+			<?php if ( $updated ) : ?>
+				<div class="notice notice-success inline"><p><?php esc_html_e( 'Impostazioni salvate.', 'mvd-wai-ctrl' ); ?></p></div>
+			<?php endif; ?>
+
+			<?php if ( $token_constant ) : ?>
+				<div class="notice notice-info inline">
+					<p><?php esc_html_e( 'Il token GitHub è definito tramite la costante MVD_WAI_CTRL_GH_TOKEN in wp-config.php e ha la precedenza sul valore salvato qui sotto.', 'mvd-wai-ctrl' ); ?></p>
+				</div>
+			<?php endif; ?>
+
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<input type="hidden" name="action" value="mvd_wai_ctrl_save_settings">
+				<?php wp_nonce_field( 'mvd_wai_ctrl_save_settings' ); ?>
+
+				<table class="form-table" role="presentation">
+					<tr>
+						<th scope="row">
+							<label for="mvd_wai_ctrl_gh_token">
+								<?php esc_html_e( 'Token GitHub (Personal Access Token)', 'mvd-wai-ctrl' ); ?>
+							</label>
+						</th>
+						<td>
+							<input
+								type="password"
+								id="mvd_wai_ctrl_gh_token"
+								name="mvd_wai_ctrl_gh_token"
+								class="regular-text"
+								value=""
+								placeholder="<?php echo $token_saved ? esc_attr__( '(token salvato — lascia vuoto per non modificarlo)', 'mvd-wai-ctrl' ) : 'ghp_…'; ?>"
+								autocomplete="new-password"
+							>
+							<p class="description">
+								<?php esc_html_e( 'Necessario per scaricare gli aggiornamenti dal repository GitHub privato. Genera un token con scope "repo" (read-only) dal tuo account GitHub.', 'mvd-wai-ctrl' ); ?>
+								<?php if ( $token_saved ) : ?>
+									<br><strong><?php esc_html_e( 'Un token è già salvato. Lascia vuoto per cancellarlo, oppure inserisci un nuovo valore per sostituirlo.', 'mvd-wai-ctrl' ); ?></strong>
+								<?php endif; ?>
+							</p>
+						</td>
+					</tr>
+				</table>
+
+				<?php submit_button( __( 'Salva token', 'mvd-wai-ctrl' ) ); ?>
+			</form>
 		</div>
 		<?php
 	}

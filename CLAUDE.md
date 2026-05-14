@@ -43,15 +43,23 @@ Render HTML del pannello admin: avvisi prerequisiti, pulsante avvio, barra di pr
 
 ```
 Click "Avvia" (browser)
-  → ajaxStart() — nonce + cap check, crea run_id, stato 'running', schedula cron
-     → spawn_cron() → MvdWaiCtrlRunner::runChain()
-        → per ogni import_id: updateStep → PMXI execute → appendStep
-        → closeRun + finishRun (completed | error)
+  → ajaxStart() — nonce + cap check, crea run_id, stato 'running'
+     → wp_remote_post (loopback non-bloccante, timeout 0.01s)
+        → wp_ajax_nopriv_mvd_wai_ctrl_run_chain → ajaxRunChain()
+           → autentica token monouso (transient _secret, TTL 60s)
+              → MvdWaiCtrlRunner::runChain()
+                 → per ogni import_id: updateStep → PMXI execute → appendStep
+                 → closeRun + finishRun (completed | error)
+     [fallback se loopback fallisce]
+     → wp_schedule_single_event + spawn_cron → MVD_WAI_CTRL_CRON_HOOK
+        → MvdWaiCtrlRunner::runChain()
 
 Polling (admin.js ogni 3 sec)
   → ajaxStatus() → MvdWaiCtrlState::get() + Logger::getRecentRuns()
      → aggiornamento barra progresso e tabella storico
 ```
+
+Il loopback è la via primaria perché garantisce `is_admin() = true`, necessario affinché WP All Import Pro carichi `PMXI_Import_Record` (classe admin-only). Il cron è solo fallback.
 
 ### Autoload
 
@@ -63,9 +71,18 @@ Mappa PSR-4-like semplice definita nel file principale: `MvdWaiCtrl{Suffix}` →
 
 ## Comandi di sviluppo
 
-Il progetto non ha `composer.json` né `package.json`. Non ci sono test automatizzati né PHPCS configurato.
+### Test e analisi statica
 
-Per avviare l'ambiente locale con `@wordpress/env` (Docker):
+```bash
+composer test               # PHPUnit (tests/Unit/)
+composer phpstan            # PHPStan level 5 su includes/ e file principale
+composer check              # PHPStan + PHPUnit in sequenza
+vendor/bin/phpunit --filter NomeTest   # singolo test
+```
+
+I test usano **Brain Monkey** (mock WP functions) e **Mockery**. Gli stub per `PMXI_Import_Record` e `$wpdb` sono in `tests/stubs/`. Il bootstrap dei test carica le classi direttamente senza il file principale del plugin.
+
+### Ambiente locale wp-env
 
 ```bash
 npx wp-env start    # dev su :8888
