@@ -4,7 +4,7 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
-## [Unreleased]
+## [1.0.1] - 2026-05-14
 
 ### Added
 - Aggiornamenti automatici direttamente dalla schermata Plugin di WordPress tramite **Plugin Update Checker** (YahnisElsts v5). Il plugin controlla le GitHub Releases del repository privato `mavidasnc/WP-All-Import-Controller`.
