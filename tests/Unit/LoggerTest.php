@@ -144,8 +144,8 @@ class LoggerTest extends TestCase {
 			->once()
 			->with(
 				'wp_mvd_wai_ctrl_log',
-				[ 'outcome' => 'success' ],
-				[ 'id' => 5, 'step_index' => -1 ],
+				[ 'outcome'       => 'success' ],
+				[ 'id'            => 5, 'is_run_header' => 1 ],
 				[ '%s' ],
 				[ '%d', '%d' ]
 			)

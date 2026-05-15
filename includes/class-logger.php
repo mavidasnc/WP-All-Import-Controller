@@ -44,7 +44,7 @@ class MvdWaiCtrlLogger {
 			id             BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
 			run_id         BIGINT UNSIGNED  NOT NULL,
 			is_run_header  TINYINT(1)       NOT NULL DEFAULT 0,
-			step_index     TINYINT          NOT NULL DEFAULT -1,
+			step_index     TINYINT                   DEFAULT NULL,
 			import_id      BIGINT UNSIGNED           DEFAULT NULL,
 			import_name    VARCHAR(255)              DEFAULT NULL,
 			outcome        VARCHAR(10)      NOT NULL DEFAULT 'start',
@@ -64,9 +64,14 @@ class MvdWaiCtrlLogger {
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta( $sql );
 
-		// Migrazione idempotente: marca le righe legacy con step_index = -1 come run header.
+		// dbDelta non modifica colonne esistenti: rende step_index nullable sulle installazioni già attive.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		$wpdb->query( "UPDATE {$table} SET is_run_header = 1 WHERE step_index = -1 AND is_run_header = 0" );
+		$wpdb->query( "ALTER TABLE {$table} MODIFY COLUMN step_index TINYINT DEFAULT NULL" );
+
+		// Migrazione idempotente: marca le righe legacy con step_index = -1 come run header
+		// e azzera il sentinel ora che la colonna è nullable.
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$wpdb->query( "UPDATE {$table} SET is_run_header = 1, step_index = NULL WHERE step_index = -1 AND is_run_header = 0" );
 	}
 
 	/**
@@ -82,12 +87,11 @@ class MvdWaiCtrlLogger {
 			[
 				'run_id'        => 0,
 				'is_run_header' => 1,
-				'step_index'    => -1,
 				'outcome'       => 'start',
 				'started_at'    => $now,
 				'created_at'    => $now,
 			],
-			[ '%d', '%d', '%d', '%s', '%s', '%s' ]
+			[ '%d', '%d', '%s', '%s', '%s' ]
 		);
 		$id = (int) $wpdb->insert_id;
 		// Il run_id coincide con l'id della riga di apertura.
@@ -142,8 +146,8 @@ class MvdWaiCtrlLogger {
 		global $wpdb;
 		$wpdb->update(
 			self::tableName(),
-			[ 'outcome' => sanitize_key( $outcome ) ],
-			[ 'id'      => $run_id, 'step_index' => -1 ],
+			[ 'outcome'       => sanitize_key( $outcome ) ],
+			[ 'id'            => $run_id, 'is_run_header' => 1 ],
 			[ '%s' ],
 			[ '%d', '%d' ]
 		);
