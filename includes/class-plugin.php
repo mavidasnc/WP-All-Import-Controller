@@ -33,8 +33,6 @@ class MvdWaiCtrlPlugin {
 		// Endpoint loopback per esecuzione in contesto admin (is_admin() = true garantito).
 		add_action( 'wp_ajax_nopriv_mvd_wai_ctrl_run_chain', [ __CLASS__, 'ajaxRunChain' ] );
 
-		// Salvataggio impostazioni (token GitHub).
-		add_action( 'admin_post_mvd_wai_ctrl_save_settings', [ __CLASS__, 'saveSettings' ] );
 	}
 
 	/**
@@ -193,35 +191,6 @@ class MvdWaiCtrlPlugin {
 		MvdWaiCtrlState::reset();
 
 		wp_send_json_success( [ 'message' => __( 'Stato resettato.', 'mvd-wai-ctrl' ) ] );
-	}
-
-	/**
-	 * Salva le impostazioni del plugin (token GitHub per gli aggiornamenti).
-	 *
-	 * @return void
-	 */
-	public static function saveSettings(): void {
-		check_admin_referer( 'mvd_wai_ctrl_save_settings' );
-
-		if ( ! current_user_can( MVD_WAI_CTRL_CAPABILITY ) ) {
-			wp_die( esc_html__( 'Permesso negato.', 'mvd-wai-ctrl' ) );
-		}
-
-		$token = sanitize_text_field( wp_unslash( $_POST['mvd_wai_ctrl_gh_token'] ?? '' ) );
-
-		if ( '' === $token ) {
-			delete_option( MVD_WAI_CTRL_TOKEN_OPTION );
-		} else {
-			update_option( MVD_WAI_CTRL_TOKEN_OPTION, $token, false );
-		}
-
-		wp_safe_redirect(
-			add_query_arg(
-				[ 'page' => 'mvd-wai-ctrl', 'settings-updated' => '1' ],
-				admin_url( 'admin.php' )
-			)
-		);
-		exit;
 	}
 
 	/**

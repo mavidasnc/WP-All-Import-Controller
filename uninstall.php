@@ -14,7 +14,6 @@ global $wpdb;
 // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 $wpdb->query( 'DROP TABLE IF EXISTS ' . $wpdb->prefix . 'mvd_wai_ctrl_log' );
 
-// Rimuove le option di stato e le impostazioni.
+// Rimuove le option di stato.
 delete_option( 'mvd_wai_ctrl_state' );
-delete_option( 'mvd_wai_ctrl_gh_token' );
 delete_transient( 'mvd_wai_ctrl_running_lock' );

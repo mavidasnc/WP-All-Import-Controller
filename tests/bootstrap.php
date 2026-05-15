@@ -21,7 +21,6 @@ define( 'MVD_WAI_CTRL_IDS',          [ 13, 2, 1, 14 ] );
 defined( 'ARRAY_A' )           || define( 'ARRAY_A',           'ARRAY_A' );
 defined( 'OBJECT' )            || define( 'OBJECT',            'OBJECT' );
 defined( 'MINUTE_IN_SECONDS' ) || define( 'MINUTE_IN_SECONDS', 60 );
-defined( 'MVD_WAI_CTRL_TOKEN_OPTION' ) || define( 'MVD_WAI_CTRL_TOKEN_OPTION', 'mvd_wai_ctrl_gh_token' );
 
 // Autoload Composer (PHPUnit, Brain Monkey, Mockery).
 require_once dirname( __DIR__ ) . '/vendor/autoload.php';

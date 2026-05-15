@@ -4,6 +4,17 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [1.2.0] - 2026-05-15
+
+### Removed
+- Form admin per il token GitHub (sezione "Impostazioni aggiornamenti"), costante `MVD_WAI_CTRL_GH_TOKEN` e option `mvd_wai_ctrl_gh_token`. Il repository è ora pubblico: gli aggiornamenti automatici funzionano in modo anonimo senza necessità di autenticazione.
+
+### Changed
+- Repository GitHub passato da privato a pubblico: rimossa la dipendenza da Personal Access Token per scaricare le release.
+
+### Fixed
+- Pulizia automatica dell'option `mvd_wai_ctrl_gh_token` residua nei siti che avevano già salvato un token (eseguita una volta a `plugins_loaded` priority 1).
+
 ## [1.1.0] - 2026-05-14
 
 ### Changed
