@@ -41,24 +41,32 @@ class MvdWaiCtrlLogger {
 		$charset = $wpdb->get_charset_collate();
 
 		$sql = "CREATE TABLE {$table} (
-			id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-			run_id        BIGINT UNSIGNED NOT NULL,
-			step_index    TINYINT         NOT NULL DEFAULT -1,
-			import_id     BIGINT UNSIGNED          DEFAULT NULL,
-			outcome       VARCHAR(10)     NOT NULL DEFAULT 'start',
-			created       INT UNSIGNED    NOT NULL DEFAULT 0,
-			updated       INT UNSIGNED    NOT NULL DEFAULT 0,
-			skipped       INT UNSIGNED    NOT NULL DEFAULT 0,
-			duration_sec  INT UNSIGNED    NOT NULL DEFAULT 0,
-			message       LONGTEXT                 DEFAULT NULL,
-			created_at    DATETIME        NOT NULL,
-			PRIMARY KEY   (id),
-			KEY idx_run_id    (run_id),
-			KEY idx_created_at (created_at)
+			id             BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
+			run_id         BIGINT UNSIGNED  NOT NULL,
+			is_run_header  TINYINT(1)       NOT NULL DEFAULT 0,
+			step_index     TINYINT          NOT NULL DEFAULT -1,
+			import_id      BIGINT UNSIGNED           DEFAULT NULL,
+			import_name    VARCHAR(255)              DEFAULT NULL,
+			outcome        VARCHAR(10)      NOT NULL DEFAULT 'start',
+			created        INT UNSIGNED     NOT NULL DEFAULT 0,
+			updated        INT UNSIGNED     NOT NULL DEFAULT 0,
+			skipped        INT UNSIGNED     NOT NULL DEFAULT 0,
+			duration_sec   INT UNSIGNED     NOT NULL DEFAULT 0,
+			message        LONGTEXT                  DEFAULT NULL,
+			started_at     DATETIME                  DEFAULT NULL,
+			created_at     DATETIME         NOT NULL,
+			PRIMARY KEY    (id),
+			KEY idx_run_id         (run_id),
+			KEY idx_run_header     (is_run_header, id),
+			KEY idx_created_at     (created_at)
 		) {$charset};";
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta( $sql );
+
+		// Migrazione idempotente: marca le righe legacy con step_index = -1 come run header.
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$wpdb->query( "UPDATE {$table} SET is_run_header = 1 WHERE step_index = -1 AND is_run_header = 0" );
 	}
 
 	/**
@@ -68,15 +76,18 @@ class MvdWaiCtrlLogger {
 	 */
 	public static function createRun(): int {
 		global $wpdb;
+		$now = current_time( 'mysql' );
 		$wpdb->insert(
 			self::tableName(),
 			[
-				'run_id'     => 0,
-				'step_index' => -1,
-				'outcome'    => 'start',
-				'created_at' => current_time( 'mysql' ),
+				'run_id'        => 0,
+				'is_run_header' => 1,
+				'step_index'    => -1,
+				'outcome'       => 'start',
+				'started_at'    => $now,
+				'created_at'    => $now,
 			],
-			[ '%d', '%d', '%s', '%s' ]
+			[ '%d', '%d', '%d', '%s', '%s', '%s' ]
 		);
 		$id = (int) $wpdb->insert_id;
 		// Il run_id coincide con l'id della riga di apertura.
@@ -102,18 +113,21 @@ class MvdWaiCtrlLogger {
 		$wpdb->insert(
 			self::tableName(),
 			[
-				'run_id'      => $run_id,
-				'step_index'  => (int) ( $data['step_index']  ?? 0 ),
-				'import_id'   => isset( $data['import_id'] ) ? (int) $data['import_id'] : null,
-				'outcome'     => sanitize_key( $data['outcome'] ?? 'error' ),
-				'created'     => (int) ( $data['created']     ?? 0 ),
-				'updated'     => (int) ( $data['updated']     ?? 0 ),
-				'skipped'     => (int) ( $data['skipped']     ?? 0 ),
+				'run_id'       => $run_id,
+				'is_run_header' => 0,
+				'step_index'   => (int) ( $data['step_index']   ?? 0 ),
+				'import_id'    => isset( $data['import_id'] ) ? (int) $data['import_id'] : null,
+				'import_name'  => isset( $data['import_name'] ) ? substr( (string) $data['import_name'], 0, 255 ) : null,
+				'outcome'      => sanitize_key( $data['outcome'] ?? 'error' ),
+				'created'      => (int) ( $data['created']      ?? 0 ),
+				'updated'      => (int) ( $data['updated']      ?? 0 ),
+				'skipped'      => (int) ( $data['skipped']      ?? 0 ),
 				'duration_sec' => (int) ( $data['duration_sec'] ?? 0 ),
-				'message'     => isset( $data['message'] ) ? substr( (string) $data['message'], 0, 65535 ) : null,
-				'created_at'  => current_time( 'mysql' ),
+				'message'      => isset( $data['message'] ) ? substr( (string) $data['message'], 0, 65535 ) : null,
+				'started_at'   => isset( $data['started_at'] ) ? (string) $data['started_at'] : null,
+				'created_at'   => current_time( 'mysql' ),
 			],
-			[ '%d', '%d', '%d', '%s', '%d', '%d', '%d', '%d', '%s', '%s' ]
+			[ '%d', '%d', '%d', '%d', '%s', '%s', '%d', '%d', '%d', '%d', '%s', '%s', '%s' ]
 		);
 	}
 
@@ -146,11 +160,11 @@ class MvdWaiCtrlLogger {
 		$table = self::tableName();
 		$limit = max( 1, min( $limit, 100 ) );
 
-		// Recupera gli ultimi N run_id (righe con step_index = -1).
+		// Recupera gli ultimi N run_id (righe header del run, is_run_header = 1).
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$run_rows = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT id, run_id, outcome, created_at FROM {$table} WHERE step_index = -1 ORDER BY id DESC LIMIT %d",
+				"SELECT id, run_id, outcome, started_at, created_at FROM {$table} WHERE is_run_header = 1 ORDER BY id DESC LIMIT %d",
 				$limit
 			),
 			ARRAY_A
@@ -163,12 +177,12 @@ class MvdWaiCtrlLogger {
 		$run_ids      = array_column( $run_rows, 'run_id' );
 		$placeholders = implode( ',', array_fill( 0, count( $run_ids ), '%d' ) );
 
-		// Recupera tutti gli step dei run trovati.
+		// Recupera tutti gli step dei run trovati (righe non-header).
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$step_rows = $wpdb->get_results(
 			// phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
 			$wpdb->prepare(
-				"SELECT run_id, step_index, import_id, outcome, created, updated, skipped, duration_sec, message, created_at FROM {$table} WHERE run_id IN ({$placeholders}) AND step_index >= 0 ORDER BY id ASC",
+				"SELECT run_id, step_index, import_id, import_name, outcome, created, updated, skipped, duration_sec, message, started_at, created_at FROM {$table} WHERE run_id IN ({$placeholders}) AND is_run_header = 0 ORDER BY step_index ASC, id ASC",
 				...$run_ids
 			),
 			ARRAY_A

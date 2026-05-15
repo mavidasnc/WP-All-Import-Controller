@@ -20,18 +20,20 @@ class MvdWaiCtrlState {
 	 */
 	private static function defaultState(): array {
 		return [
-			'status'               => 'idle',
-			'run_id'               => 0,
-			'step_current'         => 0,
-			'step_total'           => count( MVD_WAI_CTRL_IDS ),
-			'step_label'           => '',
-			'current_index'        => 0,
-			'current_chunk'        => 0,
-			'current_total_chunks' => 0,
-			'started_at'           => '',
-			'updated_at'           => '',
-			'finished_at'          => null,
-			'last_message'         => '',
+			'status'                    => 'idle',
+			'run_id'                    => 0,
+			'step_current'              => 0,
+			'step_total'                => count( MVD_WAI_CTRL_IDS ),
+			'step_label'                => '',
+			'current_index'             => 0,
+			'current_chunk_done'        => 0,
+			'current_step_total_chunks' => 0,
+			'current_total_records'     => 0,
+			'current_step_started_at'   => '',
+			'started_at'                => '',
+			'updated_at'                => '',
+			'finished_at'               => null,
+			'last_message'              => '',
 		];
 	}
 
@@ -88,13 +90,15 @@ class MvdWaiCtrlState {
 			array_merge(
 				self::defaultState(),
 				[
-					'status'               => 'running',
-					'run_id'               => $run_id,
-					'current_index'        => 0,
-					'current_chunk'        => 0,
-					'current_total_chunks' => 0,
-					'started_at'           => current_time( 'mysql' ),
-					'finished_at'          => null,
+					'status'                    => 'running',
+					'run_id'                    => $run_id,
+					'current_index'             => 0,
+					'current_chunk_done'        => 0,
+					'current_step_total_chunks' => 0,
+					'current_total_records'     => 0,
+					'current_step_started_at'   => '',
+					'started_at'                => current_time( 'mysql' ),
+					'finished_at'               => null,
 				]
 			)
 		);
@@ -117,17 +121,43 @@ class MvdWaiCtrlState {
 	}
 
 	/**
-	 * Aggiorna le informazioni sui chunk dell'import corrente (per il progresso granulare).
+	 * Aggiorna le informazioni sui chunk dell'import corrente per una barra di progresso accurata.
 	 *
-	 * @param int $chunk       Numero chunk corrente (queue_chunk_number da PMXI).
-	 * @param int $total       Totale record dell'import (count da PMXI).
+	 * Al primo chunk fissa il totale (chunks_remaining + 1 = valore iniziale restituito da PMXI).
+	 * Ai chunk successivi incrementa il contatore dei chunk completati.
+	 *
+	 * @param int $chunks_remaining Chunk ancora da processare (queue_chunk_number da PMXI, decrescente).
+	 * @param int $total_records    Totale record dell'import (count da PMXI, per visualizzazione).
 	 * @return void
 	 */
-	public static function updateChunk( int $chunk, int $total ): void {
-		$state                          = self::get();
-		$state['current_chunk']         = $chunk;
-		$state['current_total_chunks']  = $total;
+	public static function updateChunk( int $chunks_remaining, int $total_records ): void {
+		$state = self::get();
+
+		// Al primo chunk, fissa il totale chunk dell'import corrente.
+		if ( 0 === (int) $state['current_step_total_chunks'] ) {
+			$state['current_step_total_chunks'] = $chunks_remaining + 1;
+		}
+
+		$state['current_chunk_done']    = (int) $state['current_step_total_chunks'] - $chunks_remaining;
+		$state['current_total_records'] = $total_records;
 		self::save( $state );
+	}
+
+	/**
+	 * Registra il timestamp di inizio del passo corrente, se non già impostato.
+	 *
+	 * Va chiamato al primo chunk di ogni import per misurare la durata totale dello step,
+	 * che può estendersi su molti chunk e molte invocazioni di runStep().
+	 *
+	 * @return string Timestamp MySQL del momento di inizio (già esistente o appena creato).
+	 */
+	public static function markStepStart(): string {
+		$state = self::get();
+		if ( '' === ( $state['current_step_started_at'] ?? '' ) ) {
+			$state['current_step_started_at'] = current_time( 'mysql' );
+			self::save( $state );
+		}
+		return (string) $state['current_step_started_at'];
 	}
 
 	/**
@@ -146,9 +176,11 @@ class MvdWaiCtrlState {
 			return false;
 		}
 
-		$state['current_index']        = $next_index;
-		$state['current_chunk']        = 0;
-		$state['current_total_chunks'] = 0;
+		$state['current_index']             = $next_index;
+		$state['current_chunk_done']        = 0;
+		$state['current_step_total_chunks'] = 0;
+		$state['current_total_records']     = 0;
+		$state['current_step_started_at']   = '';
 		self::save( $state );
 
 		return true;

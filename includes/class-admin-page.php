@@ -26,16 +26,12 @@ class MvdWaiCtrlAdminPage {
 		$import_ids   = MVD_WAI_CTRL_IDS;
 		$runs         = MvdWaiCtrlLogger::getRecentRuns( 20 );
 
-		// Recupera i nomi reali degli import se WP All Import è attivo.
+		// Recupera i nomi reali degli import tramite l'helper del Runner.
 		$import_names = [];
-		if ( $pmxi_active ) {
-			foreach ( $import_ids as $id ) {
-				$rec = new PMXI_Import_Record();
-				$rec->getById( $id );
-				$import_names[ $id ] = $rec->isEmpty()
-					? sprintf( __( '[Import ID %d — non trovato]', 'mvd-wai-ctrl' ), $id )
-					: ( $rec->name ?: sprintf( __( 'Import ID %d', 'mvd-wai-ctrl' ), $id ) );
-			}
+		foreach ( $import_ids as $id ) {
+			$import_names[ $id ] = $pmxi_active
+				? MvdWaiCtrlRunner::getImportDisplayName( $id )
+				: sprintf( __( 'Import ID %d', 'mvd-wai-ctrl' ), $id );
 		}
 		?>
 		<div class="wrap mvd-wai-ctrl-wrap">
@@ -54,15 +50,7 @@ class MvdWaiCtrlAdminPage {
 					<?php foreach ( $import_ids as $step => $id ) : ?>
 						<li>
 							<span class="mvd-wai-ctrl-step-num"><?php echo esc_html( (string) ( $step + 1 ) ); ?></span>
-							<span class="mvd-wai-ctrl-import-name">
-								<?php
-								if ( $pmxi_active && isset( $import_names[ $id ] ) ) {
-									echo esc_html( $import_names[ $id ] );
-								} else {
-									echo esc_html( sprintf( __( 'Import ID %d', 'mvd-wai-ctrl' ), $id ) );
-								}
-								?>
-							</span>
+							<span class="mvd-wai-ctrl-import-name"><?php echo esc_html( $import_names[ $id ] ); ?></span>
 							<code class="mvd-wai-ctrl-import-id">ID: <?php echo esc_html( (string) $id ); ?></code>
 						</li>
 					<?php endforeach; ?>
@@ -105,6 +93,20 @@ class MvdWaiCtrlAdminPage {
 				<p id="mvd-wai-ctrl-progress-label" class="mvd-wai-ctrl-progress-label">
 					<?php echo esc_html( $state['step_label'] ?: __( 'In attesa di avvio...', 'mvd-wai-ctrl' ) ); ?>
 				</p>
+				<?php
+				$chunk_info = '';
+				$tot_ch     = (int) ( $state['current_step_total_chunks'] ?? 0 );
+				$done_ch    = (int) ( $state['current_chunk_done']         ?? 0 );
+				if ( $tot_ch > 0 ) {
+					$chunk_info = sprintf(
+						/* translators: 1: chunk completati, 2: totale chunk */
+						__( 'Chunk %1$d / %2$d', 'mvd-wai-ctrl' ),
+						$done_ch,
+						$tot_ch
+					);
+				}
+				?>
+				<p id="mvd-wai-ctrl-chunk-info" class="mvd-wai-ctrl-chunk-info"><?php echo esc_html( $chunk_info ); ?></p>
 				<pre id="mvd-wai-ctrl-last-msg" class="mvd-wai-ctrl-last-msg"><?php echo esc_html( $state['last_message'] ); ?></pre>
 			</div>
 
@@ -131,20 +133,21 @@ class MvdWaiCtrlAdminPage {
 	 * @return int Percentuale 0-100.
 	 */
 	private static function progressPercent( array $state ): int {
-		$total   = (int) ( $state['step_total']   ?? count( MVD_WAI_CTRL_IDS ) );
-		$current = (int) ( $state['step_current'] ?? 0 );
-		$chunk   = (int) ( $state['current_chunk']        ?? 0 );
-		$chunks  = (int) ( $state['current_total_chunks'] ?? 0 );
+		$total      = (int) ( $state['step_total']                 ?? count( MVD_WAI_CTRL_IDS ) );
+		$current    = (int) ( $state['step_current']               ?? 0 );
+		$done       = (int) ( $state['current_chunk_done']         ?? 0 );
+		$tot_chunks = (int) ( $state['current_step_total_chunks']  ?? 0 );
 
 		if ( 0 === $total ) {
 			return 0;
 		}
 
-		// Aggiunge la frazione del chunk corrente al progresso per una barra fluida.
-		$frac = ( $chunks > 0 && $chunk > 0 ) ? min( 1.0, $chunk / $chunks ) : 0.0;
-		$pct  = ( $current + $frac ) / $total * 100;
+		// Aggiunge la frazione chunk-done/chunk-totali al progresso dello step corrente.
+		// step_current è 1-based: il numero di step completati è (current - 1) + frazione intra-step.
+		$frac = ( $tot_chunks > 0 ) ? min( 1.0, $done / $tot_chunks ) : 0.0;
+		$pct  = ( ( $current - 1 ) + $frac ) / $total * 100;
 
-		return (int) round( min( 100, $pct ) );
+		return (int) round( max( 0, min( 100, $pct ) ) );
 	}
 
 	/**
@@ -182,7 +185,7 @@ class MvdWaiCtrlAdminPage {
 						<td><?php echo esc_html( (string) count( $steps ) ); ?>/<?php echo esc_html( (string) count( MVD_WAI_CTRL_IDS ) ); ?></td>
 						<td>
 							<?php if ( ! empty( $steps ) ) : ?>
-								<details>
+								<details data-run-id="<?php echo esc_attr( (string) $run['run_id'] ); ?>">
 									<summary><?php esc_html_e( 'Visualizza', 'mvd-wai-ctrl' ); ?></summary>
 									<table class="mvd-wai-ctrl-steps-table">
 										<tr>

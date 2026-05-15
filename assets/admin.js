@@ -9,6 +9,7 @@
 	var progressDiv = null;
 	var progressBar = null;
 	var progressLbl = null;
+	var chunkInfo   = null;
 	var lastMsg     = null;
 	var toast       = null;
 
@@ -18,6 +19,7 @@
 		progressDiv = document.getElementById( 'mvd-wai-ctrl-progress' );
 		progressBar = document.getElementById( 'mvd-wai-ctrl-progress-bar' );
 		progressLbl = document.getElementById( 'mvd-wai-ctrl-progress-label' );
+		chunkInfo   = document.getElementById( 'mvd-wai-ctrl-chunk-info' );
 		lastMsg     = document.getElementById( 'mvd-wai-ctrl-last-msg' );
 		toast       = document.getElementById( 'mvd-wai-ctrl-toast' );
 
@@ -136,16 +138,16 @@
 	function updateUI( data ) {
 		var state = data.state || {};
 
-		var status  = state.status      || 'idle';
-		var current = parseInt( state.step_current, 10 )        || 0;
-		var total   = parseInt( state.step_total, 10 )          || 4;
-		var chunk   = parseInt( state.current_chunk, 10 )       || 0;
-		var chunks  = parseInt( state.current_total_chunks, 10 ) || 0;
+		var status     = state.status      || 'idle';
+		var current    = parseInt( state.step_current,              10 ) || 0;
+		var total      = parseInt( state.step_total,                10 ) || 4;
+		var chunkDone  = parseInt( state.current_chunk_done,        10 ) || 0;
+		var totChunks  = parseInt( state.current_step_total_chunks, 10 ) || 0;
 
-		// Percentuale frazionaria: aggiunge la frazione del chunk corrente per una barra fluida.
-		var frac = ( chunks > 0 && chunk > 0 ) ? Math.min( 1, chunk / chunks ) : 0;
-		var pct  = total > 0 ? Math.round( ( ( current + frac ) / total ) * 100 ) : 0;
-		pct = Math.min( 100, pct );
+		// Percentuale: step completati (current è 1-based → base = current-1) + frazione intra-step.
+		var frac = totChunks > 0 ? Math.min( 1, chunkDone / totChunks ) : 0;
+		var pct  = total > 0 ? Math.round( ( ( current - 1 + frac ) / total ) * 100 ) : 0;
+		pct = Math.max( 0, Math.min( 100, pct ) );
 
 		// Aggiorna barra progresso.
 		if ( progressBar ) {
@@ -161,6 +163,12 @@
 
 		if ( progressLbl ) {
 			progressLbl.textContent = state.step_label || '';
+		}
+
+		if ( chunkInfo ) {
+			chunkInfo.textContent = totChunks > 0
+				? 'Chunk ' + chunkDone + ' / ' + totChunks
+				: '';
 		}
 
 		if ( lastMsg ) {
@@ -242,6 +250,12 @@
 			return;
 		}
 
+		// Salva i run_id dei <details> aperti prima di sovrascrivere il DOM.
+		var openRunIds = new Set(
+			Array.from( container.querySelectorAll( 'details[data-run-id][open]' ) )
+				.map( function ( el ) { return el.dataset.runId; } )
+		);
+
 		var html = '<table class="widefat striped mvd-wai-ctrl-runs-table">'
 			+ '<thead><tr>'
 			+ '<th>Run ID</th><th>Avviato il</th><th>Esito</th><th>Passi</th><th>Dettaglio</th>'
@@ -261,7 +275,7 @@
 				+ '<td>';
 
 			if ( steps.length ) {
-				html += '<details><summary>Visualizza</summary>'
+				html += '<details data-run-id="' + escHtml( String( run.run_id || '' ) ) + '"><summary>Visualizza</summary>'
 					+ '<table class="mvd-wai-ctrl-steps-table">'
 					+ '<tr><th>Passo</th><th>Import ID</th><th>Esito</th><th>Creati</th><th>Aggiornati</th><th>Saltati</th><th>Durata (s)</th></tr>';
 				steps.forEach( function ( step ) {
@@ -287,6 +301,14 @@
 
 		html += '</tbody></table>';
 		container.innerHTML = html;
+
+		// Ripristina lo stato aperto dei <details> che erano aperti prima del re-render.
+		openRunIds.forEach( function ( runId ) {
+			var el = container.querySelector( 'details[data-run-id="' + runId.replace( /"/g, '\\"' ) + '"]' );
+			if ( el ) {
+				el.open = true;
+			}
+		} );
 	}
 
 	/**

@@ -32,6 +32,33 @@ class MvdWaiCtrlRunner {
 	private const LOCK_TTL = 120;
 
 	/**
+	 * Restituisce il nome leggibile di un'importazione WP All Import Pro.
+	 *
+	 * Usa friendly_name (nome dato dall'utente nell'UI) come primario,
+	 * con fallback su name (filename) e infine "Import ID %d".
+	 *
+	 * @param int $import_id ID dell'importazione.
+	 * @return string        Nome visualizzabile.
+	 */
+	public static function getImportDisplayName( int $import_id ): string {
+		if ( ! class_exists( 'PMXI_Import_Record' ) ) {
+			/* translators: %d: ID dell'import */
+			return sprintf( __( 'Import ID %d', 'mvd-wai-ctrl' ), $import_id );
+		}
+		$rec = new PMXI_Import_Record();
+		$rec->getById( $import_id );
+		if ( $rec->isEmpty() ) {
+			/* translators: %d: ID dell'import non trovato */
+			return sprintf( __( '[Import ID %d — non trovato]', 'mvd-wai-ctrl' ), $import_id );
+		}
+		$friendly = isset( $rec->friendly_name ) ? trim( (string) $rec->friendly_name ) : '';
+		if ( '' !== $friendly ) {
+			return $friendly;
+		}
+		return $rec->name ?: sprintf( __( 'Import ID %d', 'mvd-wai-ctrl' ), $import_id );
+	}
+
+	/**
 	 * Processa un singolo step della catena. Punto di ingresso del loopback e del cron fallback.
 	 *
 	 * @return void
@@ -61,11 +88,12 @@ class MvdWaiCtrlRunner {
 			return;
 		}
 
-		$state        = MvdWaiCtrlState::get();
-		$run_id       = (int) $state['run_id'];
-		$current_idx  = (int) $state['current_index'];
-		$ids          = MVD_WAI_CTRL_IDS;
-		$import_id    = $ids[ $current_idx ] ?? null;
+		$state            = MvdWaiCtrlState::get();
+		$run_id           = (int) $state['run_id'];
+		$current_idx      = (int) $state['current_index'];
+		$ids              = MVD_WAI_CTRL_IDS;
+		$import_id        = $ids[ $current_idx ] ?? null;
+		$step_started_at  = (string) ( $state['current_step_started_at'] ?? '' );
 
 		// Salvaguardia: indice fuori range (stato corrotto).
 		if ( null === $import_id ) {
@@ -75,13 +103,9 @@ class MvdWaiCtrlRunner {
 			return;
 		}
 
-		$step_label = sprintf(
-			/* translators: 1: numero passo, 2: totale passi, 3: ID import */
-			__( 'Passo %1$d di %2$d (Import ID: %3$d)', 'mvd-wai-ctrl' ),
-			$current_idx + 1,
-			count( $ids ),
-			$import_id
-		);
+		// Inizializzazione con fallback: sarà sovrascritta col nome reale dopo getById().
+		$import_name = sprintf( __( 'Import ID %d', 'mvd-wai-ctrl' ), $import_id );
+		$step_label  = '';
 
 		$log_messages  = [];
 		$logger        = static function ( string $msg ) use ( &$log_messages ): void {
@@ -91,8 +115,8 @@ class MvdWaiCtrlRunner {
 			}
 		};
 
-		$step_start    = time();
-		$current_chunk = (int) $state['current_chunk'];
+		$step_start     = time();
+		$is_first_chunk = 0 === (int) $state['current_step_total_chunks'];
 		$schedule_next = false;
 		$chain_done    = false;
 
@@ -110,8 +134,23 @@ class MvdWaiCtrlRunner {
 				);
 			}
 
-			// Al primo chunk di questo import aggiorna il label di stato.
-			if ( 0 === $current_chunk ) {
+			// Determina il nome leggibile dell'import dall'istanza già caricata.
+			$friendly     = isset( $import->friendly_name ) ? trim( (string) $import->friendly_name ) : '';
+			$import_name  = '' !== $friendly
+				? $friendly
+				: ( $import->name ?: sprintf( __( 'Import ID %d', 'mvd-wai-ctrl' ), $import_id ) );
+			$step_label   = sprintf(
+				/* translators: 1: numero passo, 2: totale passi, 3: nome import, 4: ID import */
+				__( 'Passo %1$d di %2$d: %3$s (ID: %4$d)', 'mvd-wai-ctrl' ),
+				$current_idx + 1,
+				count( $ids ),
+				$import_name,
+				$import_id
+			);
+
+			// Al primo chunk: registra il timestamp di inizio e aggiorna il label.
+			if ( $is_first_chunk ) {
+				$step_started_at = MvdWaiCtrlState::markStepStart();
 				MvdWaiCtrlState::updateStep(
 					$current_idx,
 					$step_label,
@@ -134,10 +173,8 @@ class MvdWaiCtrlRunner {
 					$current_idx,
 					$step_label,
 					sprintf(
-						/* translators: 1: chunk corrente, 2: totale record, 3: creati, 4: aggiornati, 5: saltati */
-						__( 'Chunk %1$d su ~%2$d record totali — Creati: %3$d | Aggiornati: %4$d | Saltati: %5$d', 'mvd-wai-ctrl' ),
-						$q_chunk,
-						$count,
+						/* translators: 1: creati, 2: aggiornati, 3: saltati */
+						__( 'Creati: %1$d | Aggiornati: %2$d | Saltati: %3$d', 'mvd-wai-ctrl' ),
 						(int) $import->created,
 						(int) $import->updated,
 						(int) $import->skipped
@@ -146,16 +183,21 @@ class MvdWaiCtrlRunner {
 				$schedule_next = true;
 			} else {
 				// Import completato: registra lo step e avanza.
+				$duration_sec = $step_started_at
+					? max( 0, time() - (int) strtotime( $step_started_at ) )
+					: time() - $step_start;
 				MvdWaiCtrlLogger::appendStep(
 					$run_id,
 					[
 						'step_index'   => $current_idx,
 						'import_id'    => $import_id,
+						'import_name'  => $import_name,
 						'outcome'      => 'success',
 						'created'      => (int) $import->created,
 						'updated'      => (int) $import->updated,
 						'skipped'      => (int) $import->skipped,
-						'duration_sec' => time() - $step_start,
+						'duration_sec' => $duration_sec,
+						'started_at'   => $step_started_at ?: current_time( 'mysql' ),
 						'message'      => implode( "\n", array_slice( $log_messages, -50 ) ),
 					]
 				);
@@ -179,13 +221,18 @@ class MvdWaiCtrlRunner {
 				}
 			}
 		} catch ( \Throwable $e ) {
+			$err_duration = $step_started_at
+				? max( 0, time() - (int) strtotime( $step_started_at ) )
+				: time() - $step_start;
 			MvdWaiCtrlLogger::appendStep(
 				$run_id,
 				[
 					'step_index'   => $current_idx,
 					'import_id'    => $import_id,
+					'import_name'  => $import_name,
 					'outcome'      => 'error',
-					'duration_sec' => time() - $step_start,
+					'duration_sec' => $err_duration,
+					'started_at'   => $step_started_at ?: current_time( 'mysql' ),
 					'message'      => $e->getMessage() . "\n" . implode( "\n", array_slice( $log_messages, -50 ) ),
 				]
 			);

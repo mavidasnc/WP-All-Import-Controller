@@ -4,6 +4,24 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [1.3.0] - 2026-05-15
+
+### Added
+- Elemento `Chunk X / Y` nella sezione di progresso: mostra il numero di chunk completati e il totale in modo visibile (non più solo nel messaggio di log).
+- Colonne `import_name`, `is_run_header` e `started_at` nella tabella `{prefix}mvd_wai_ctrl_log`. `import_name` conserva il nome amichevole dell'importazione al momento dell'esecuzione; `is_run_header` sostituisce il vecchio sentinel `step_index = -1`; `started_at` registra l'inizio reale di ogni step.
+- Metodo statico `MvdWaiCtrlRunner::getImportDisplayName()` per risolvere `friendly_name` / `name` di un'importazione PMXI con fallback su "Import ID N".
+- Metodo `MvdWaiCtrlState::markStepStart()` per registrare il timestamp di inizio dello step e calcolarne la durata totale anche su import multi-chunk lunghi.
+
+### Changed
+- **Nomi importazioni nella UI**: la sezione "Sequenza configurata" e la barra di progresso live mostrano ora il nome amichevole dell'importazione (campo `friendly_name` di WP All Import Pro) invece del filename XML/CSV.
+- **Barra di progresso corretta**: la formula di calcolo percentuale usa ora `chunk_done / total_chunks` (entrambe grandezze omogenee) invece di `queue_chunk_number / record_count`. La barra cresce monotonicamente.
+- **`duration_sec` corretto**: riflette la durata totale dello step (dalla prima esecuzione del primo chunk all'ultimo), non solo l'ultimo chunk. Il valore è ora coerente con la differenza `created_at − started_at` visibile in DB.
+- Label `last_message` durante l'elaborazione dei chunk semplificato a "Creati: X | Aggiornati: Y | Saltati: Z" (le info chunk sono nel nuovo elemento dedicato).
+- Storico: query `getRecentRuns()` usa `WHERE is_run_header = 1` invece di `WHERE step_index = -1`.
+
+### Fixed
+- I `<details>` dello storico run si chiudevano a ogni ciclo di polling (3 s) perché `refreshRunsTable` riscriveva `innerHTML` distruggendo il DOM. Ora i run aperti vengono salvati prima del re-render e ripristinati dopo.
+
 ## [1.2.0] - 2026-05-15
 
 ### Removed
