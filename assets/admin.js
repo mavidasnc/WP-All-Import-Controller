@@ -167,7 +167,7 @@
 
 		if ( chunkInfo ) {
 			chunkInfo.textContent = totChunks > 0
-				? 'Chunk ' + chunkDone + ' / ' + totChunks
+				? 'Record ' + chunkDone + ' / ' + totChunks
 				: '';
 		}
 

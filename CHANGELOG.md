@@ -4,6 +4,11 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [1.3.3] - 2026-05-15
+
+### Fixed
+- Indicatore "Chunk X / Y" mostrava valori negativi su import multi-chunk. `queue_chunk_number` di PMXI è una posizione crescente (record già processati), non un countdown: `updateChunk()` ora usa il valore direttamente come "fatto" e `count` come totale. Il testo è aggiornato in "Record X / Y" per riflettere la semantica corretta.
+
 ## [1.3.2] - 2026-05-15
 
 ### Fixed

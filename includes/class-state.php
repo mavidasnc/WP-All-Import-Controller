@@ -121,25 +121,21 @@ class MvdWaiCtrlState {
 	}
 
 	/**
-	 * Aggiorna le informazioni sui chunk dell'import corrente per una barra di progresso accurata.
+	 * Aggiorna il progresso dell'import corrente per la barra di avanzamento.
 	 *
-	 * Al primo chunk fissa il totale (chunks_remaining + 1 = valore iniziale restituito da PMXI).
-	 * Ai chunk successivi incrementa il contatore dei chunk completati.
+	 * queue_chunk_number di PMXI è una posizione crescente (record già processati),
+	 * non un countdown. Viene usato direttamente come "fatto" mentre count è il totale.
 	 *
-	 * @param int $chunks_remaining Chunk ancora da processare (queue_chunk_number da PMXI, decrescente).
-	 * @param int $total_records    Totale record dell'import (count da PMXI, per visualizzazione).
+	 * @param int $records_done   Record già processati (queue_chunk_number da PMXI, crescente).
+	 * @param int $total_records  Totale record dell'import (count da PMXI).
 	 * @return void
 	 */
-	public static function updateChunk( int $chunks_remaining, int $total_records ): void {
+	public static function updateChunk( int $records_done, int $total_records ): void {
 		$state = self::get();
 
-		// Al primo chunk, fissa il totale chunk dell'import corrente.
-		if ( 0 === (int) $state['current_step_total_chunks'] ) {
-			$state['current_step_total_chunks'] = $chunks_remaining + 1;
-		}
-
-		$state['current_chunk_done']    = (int) $state['current_step_total_chunks'] - $chunks_remaining;
-		$state['current_total_records'] = $total_records;
+		$state['current_chunk_done']        = $records_done;
+		$state['current_step_total_chunks'] = $total_records;
+		$state['current_total_records']     = $total_records;
 		self::save( $state );
 	}
 
