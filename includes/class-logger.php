@@ -72,6 +72,11 @@ class MvdWaiCtrlLogger {
 		// e azzera il sentinel ora che la colonna è nullable.
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$wpdb->query( "UPDATE {$table} SET is_run_header = 1, step_index = NULL WHERE step_index = -1 AND is_run_header = 0" );
+
+		// Allinea l'option di versione DB (utile quando createTable è chiamata dall'activation hook).
+		if ( defined( 'MVD_WAI_CTRL_DB_VERSION' ) ) {
+			update_option( 'mvd_wai_ctrl_db_version', MVD_WAI_CTRL_DB_VERSION, false );
+		}
 	}
 
 	/**

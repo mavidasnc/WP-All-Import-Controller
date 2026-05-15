@@ -4,6 +4,12 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [Unreleased]
+
+### Added
+- Costante `MVD_WAI_CTRL_DB_VERSION` per versionare lo schema DB indipendentemente dal plugin.
+- Aggiornamento automatico dello schema DB a `plugins_loaded`: se `mvd_wai_ctrl_db_version` in DB è diversa dalla costante, `createTable()` viene rieseguita senza bisogno di disattivare/riattivare il plugin.
+
 ## [1.3.0] - 2026-05-15
 
 ### Added

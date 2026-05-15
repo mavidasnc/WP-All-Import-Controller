@@ -24,6 +24,7 @@ if ( file_exists( __DIR__ . '/vendor/autoload.php' ) ) {
 // ── Costanti ──────────────────────────────────────────────────────────────────
 
 define( 'MVD_WAI_CTRL_VERSION',       '1.3.0' );
+define( 'MVD_WAI_CTRL_DB_VERSION',    '1.3.0' ); // aggiornare solo quando cambia lo schema DB
 define( 'MVD_WAI_CTRL_DIR',           plugin_dir_path( __FILE__ ) );
 define( 'MVD_WAI_CTRL_URL',           plugin_dir_url( __FILE__ ) );
 define( 'MVD_WAI_CTRL_CRON_HOOK',     'mvd_wai_ctrl_run' );
@@ -74,12 +75,19 @@ register_deactivation_hook(
 
 // ── Migrazione da versioni precedenti ─────────────────────────────────────────
 
-// Rimuove l'option del token GitHub introdotta in 1.0.1 e rimossa in 1.2.0 (repo ora pubblico).
 add_action(
 	'plugins_loaded',
 	function (): void {
+		// Rimuove l'option del token GitHub introdotta in 1.0.1 e rimossa in 1.2.0 (repo ora pubblico).
 		if ( get_option( 'mvd_wai_ctrl_gh_token', false ) !== false ) {
 			delete_option( 'mvd_wai_ctrl_gh_token' );
+		}
+
+		// Aggiorna lo schema DB se la versione salvata è diversa da quella corrente.
+		// Copre gli aggiornamenti automatici del plugin, che non passano per register_activation_hook.
+		if ( get_option( 'mvd_wai_ctrl_db_version' ) !== MVD_WAI_CTRL_DB_VERSION ) {
+			MvdWaiCtrlLogger::createTable();
+			update_option( 'mvd_wai_ctrl_db_version', MVD_WAI_CTRL_DB_VERSION, false );
 		}
 	},
 	1
