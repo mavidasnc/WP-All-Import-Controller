@@ -111,6 +111,9 @@ add_action(
 		);
 
 		// Scarica lo zip allegato alla GitHub Release (non lo zip auto-generato dal tag).
-		$checker->getVcsApi()->enableReleaseAssets();
+		$vcs_api = $checker->getVcsApi();
+		if ( $vcs_api instanceof \YahnisElsts\PluginUpdateChecker\v5p6\Vcs\GitHubApi ) {
+			$vcs_api->enableReleaseAssets();
+		}
 	}
 );
