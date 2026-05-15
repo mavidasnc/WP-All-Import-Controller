@@ -148,8 +148,26 @@ class MvdWaiCtrlRunner {
 				$import_id
 			);
 
-			// Al primo chunk: registra il timestamp di inizio e aggiorna il label.
+			// Al primo chunk: resetta i counter PMXI e registra timestamp di inizio.
 			if ( $is_first_chunk ) {
+				// PMXI riusa lo stesso record per ogni esecuzione: senza reset dei
+				// counter, una seconda chiamata a execute() esce senza processare nulla
+				// perché processing=1 stuck o imported>=count soddisfano subito la
+				// condizione di "completato" (record.php:117/295/377).
+				// Mirror del pattern usato da PMXI CLI (classes/cli.php:62-71).
+				$import->set(
+					[
+						'triggered'          => 1,
+						'imported'           => 0,
+						'canceled'           => 0,
+						'created'            => 0,
+						'updated'            => 0,
+						'skipped'            => 0,
+						'queue_chunk_number' => 0,
+						'processing'         => 0,
+					]
+				)->update();
+
 				$step_started_at = MvdWaiCtrlState::markStepStart();
 				MvdWaiCtrlState::updateStep(
 					$current_idx,

@@ -350,6 +350,113 @@ class RunnerTest extends TestCase {
 		$this->assertContains( 1, $step_currents_saved );
 	}
 
+	public function test_first_chunk_resets_pmxi_counters_before_execute(): void {
+		// Scenario: primo chunk (current_step_total_chunks=0). Il runner deve
+		// chiamare set()->update() con i campi di reset prima di execute().
+		\PMXI_Import_Record::configureStub(
+			[
+				[ 'empty' => false, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'queue_chunk_number' => 0 ],
+			]
+		);
+
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
+		Functions\when( 'delete_transient' )->justReturn( true );
+
+		$state = array_merge(
+			$this->runningState( run_id: 10, current_index: 0 ),
+			[ 'current_step_total_chunks' => 0 ]
+		);
+		Functions\when( 'get_option' )->justReturn( $state );
+		Functions\when( 'update_option' )->justReturn( true );
+		Functions\when( 'current_time' )->justReturn( '2024-01-01 00:00:00' );
+		Functions\when( 'sanitize_key' )->returnArg();
+		Functions\when( '__' )->returnArg();
+		Functions\when( 'add_filter' )->justReturn( true );
+		$this->stubScheduleSelf();
+
+		$wpdb = $this->createWpdbMock();
+		$wpdb->shouldReceive( 'insert' )->andReturn( 1 );
+		$wpdb->shouldReceive( 'update' )->andReturn( 1 );
+
+		\MvdWaiCtrlRunner::runStep();
+
+		$set_calls = \PMXI_Import_Record::getSetCalls();
+		$reset_call = null;
+		foreach ( $set_calls as $call ) {
+			if ( array_key_exists( 'imported', $call ) && 0 === $call['imported'] ) {
+				$reset_call = $call;
+				break;
+			}
+		}
+
+		$this->assertNotNull( $reset_call, 'Il runner deve chiamare set() con i counter azzerati al primo chunk.' );
+		$this->assertSame( 0, $reset_call['imported'] );
+		$this->assertSame( 0, $reset_call['created'] );
+		$this->assertSame( 0, $reset_call['updated'] );
+		$this->assertSame( 0, $reset_call['skipped'] );
+		$this->assertSame( 0, $reset_call['queue_chunk_number'] );
+		$this->assertSame( 0, $reset_call['processing'] );
+		$this->assertSame( 1, $reset_call['triggered'] );
+	}
+
+	public function test_subsequent_chunk_does_not_reset_pmxi_counters(): void {
+		// Scenario: chunk successivo (current_step_total_chunks > 0, import in corso).
+		// Il runner NON deve chiamare set() con i counter azzerati: azzererebbe
+		// un import già avviato, facendolo ripartire da zero.
+		\PMXI_Import_Record::configureStub(
+			[
+				[
+					'empty'              => false,
+					'created'            => 5,
+					'updated'            => 0,
+					'skipped'            => 0,
+					'queue_chunk_number' => 10,
+					'count'              => 100,
+					'imported'           => 50,
+				],
+			]
+		);
+
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
+		Functions\when( 'delete_transient' )->justReturn( true );
+
+		// current_step_total_chunks > 0 → $is_first_chunk = false
+		$state = array_merge(
+			$this->runningState( run_id: 11, current_index: 0 ),
+			[
+				'current_step_total_chunks' => 5,
+				'current_chunk_done'        => 2,
+				'current_step_started_at'   => '2024-01-01 00:00:00',
+			]
+		);
+		Functions\when( 'get_option' )->justReturn( $state );
+		Functions\when( 'update_option' )->justReturn( true );
+		Functions\when( 'current_time' )->justReturn( '2024-01-01 00:00:00' );
+		Functions\when( 'sanitize_key' )->returnArg();
+		Functions\when( '__' )->returnArg();
+		Functions\when( 'add_filter' )->justReturn( true );
+		$this->stubScheduleSelf();
+
+		$wpdb = $this->createWpdbMock();
+		$wpdb->shouldReceive( 'insert' )->andReturn( 1 );
+		$wpdb->shouldReceive( 'update' )->andReturn( 1 );
+
+		\MvdWaiCtrlRunner::runStep();
+
+		$set_calls = \PMXI_Import_Record::getSetCalls();
+		$has_reset = false;
+		foreach ( $set_calls as $call ) {
+			if ( array_key_exists( 'imported', $call ) && 0 === $call['imported'] ) {
+				$has_reset = true;
+				break;
+			}
+		}
+
+		$this->assertFalse( $has_reset, 'Il runner NON deve azzerare i counter PMXI su chunk successivi al primo.' );
+	}
+
 	public function test_schedule_self_uses_fallback_cron_when_loopback_fails(): void {
 		Functions\when( 'wp_generate_password' )->justReturn( 'test-secret' );
 		Functions\when( 'admin_url' )->justReturn( 'http://localhost/wp-admin/admin-ajax.php' );

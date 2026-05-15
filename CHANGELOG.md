@@ -4,6 +4,11 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [1.3.2] - 2026-05-15
+
+### Fixed
+- `MvdWaiCtrlRunner::runStep()` non resettava i counter PMXI (`imported`, `created`, `updated`, `skipped`, `queue_chunk_number`, `processing`) prima di chiamare `execute()`. Al primo chunk di ogni step il runner chiama ora `$import->set([...])->update()` con i counter azzerati, replicando il pattern della CLI di WP All Import Pro. Senza questo reset, una seconda esecuzione della catena usciva silenziosamente da `execute()` (condizione `imported >= count` o `processing == 1` già soddisfatta) e loggava erroneamente "Success" senza aver importato nulla.
+
 ## [1.3.1] - 2026-05-15
 
 ### Added
