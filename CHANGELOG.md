@@ -4,6 +4,23 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [1.4.0] - 2026-05-18
+
+### Added
+- **Shutdown handler PHP**: `register_shutdown_function` nel runner intercetta fatal error / OOM e scrive una riga `crashed` nel DB log e nel file di log prima che il processo muoia.
+- **Watchdog AJAX**: `ajaxStatus()` rileva cron morti — se `updated_at` è più vecchio di 180 s e il lock transient è assente, marca automaticamente il run come `crashed`.
+- **Log su file rotante**: nuovo metodo `MvdWaiCtrlLogger::writeFile()` scrive in `wp-content/uploads/mvd-wai-ctrl-logs/YYYY-MM-DD.log`. La cartella è protetta con `.htaccess` deny-all. I file vengono rimossi dopo 30 giorni. Nuovo metodo `markRunCrashed()` per chiudere run interrotti.
+- **Banner errore persistente**: sopra la progressbar compare un div rosso con messaggio di errore, passo interrotto e pulsanti "Riprendi" / "Reset". Resta visibile fino all'azione dell'utente.
+- **Ripresa import interrotto**: nuovo handler AJAX `mvd_wai_ctrl_resume` che riprende la catena da `current_index` senza resettare i counter PMXI, sfruttando `queue_chunk_number` persistente nel record PMXI. `MvdWaiCtrlState::markResumeRequested()` imposta `resuming=true` per istruire il runner.
+- **Resilienza polling JS**: dopo 3 fallimenti AJAX consecutivi il polling si ferma e mostra il banner con messaggio "Impossibile contattare il server".
+- Nuove costanti: `MVD_WAI_CTRL_WATCHDOG_THRESHOLD` (180s), `MVD_WAI_CTRL_LOG_DIR`, `MVD_WAI_CTRL_LOG_RETENTION_DAYS` (30 giorni).
+- Nuovo outcome `crashed` nel log (distinto da `error` per crash inattesi).
+- `uninstall.php` rimuove la cartella log all'eliminazione del plugin.
+
+### Changed
+- `MvdWaiCtrlState::defaultState()` aggiunge `resuming` (bool) e `crash_reason` (string|null).
+- Il blocco reset counter PMXI in `runStep()` viene saltato quando `resuming=true`.
+
 ## [1.3.3] - 2026-05-15
 
 ### Fixed

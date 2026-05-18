@@ -4,6 +4,33 @@
  * Fornisce la struttura necessaria affinché Mockery possa creare mock tipizzati.
  */
 
+// Stub per le funzioni WP usate da MvdWaiCtrlLogger::writeFile() nei test unitari.
+// Brain Monkey le ridefinirà a runtime nei test che ne hanno bisogno.
+if ( ! function_exists( 'wp_upload_dir' ) ) {
+	function wp_upload_dir(): array {
+		return [
+			'basedir' => sys_get_temp_dir(),
+			'baseurl' => 'http://localhost/wp-content/uploads',
+			'error'   => false,
+		];
+	}
+}
+if ( ! function_exists( 'wp_mkdir_p' ) ) {
+	function wp_mkdir_p( string $target ): bool {
+		return is_dir( $target ) || mkdir( $target, 0755, true );
+	}
+}
+if ( ! function_exists( 'trailingslashit' ) ) {
+	function trailingslashit( string $string ): string {
+		return rtrim( $string, '/\\' ) . '/';
+	}
+}
+if ( ! function_exists( 'wp_json_encode' ) ) {
+	function wp_json_encode( mixed $data ): string|false {
+		return json_encode( $data );
+	}
+}
+
 if ( ! class_exists( 'wpdb' ) ) {
 	// phpcs:disable
 	class wpdb {

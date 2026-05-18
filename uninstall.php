@@ -16,4 +16,24 @@ $wpdb->query( 'DROP TABLE IF EXISTS ' . $wpdb->prefix . 'mvd_wai_ctrl_log' );
 
 // Rimuove le option di stato.
 delete_option( 'mvd_wai_ctrl_state' );
+delete_option( 'mvd_wai_ctrl_db_version' );
 delete_transient( 'mvd_wai_ctrl_running_lock' );
+
+// Rimuove la cartella dei log.
+$upload_dir = wp_upload_dir();
+if ( empty( $upload_dir['error'] ) ) {
+	$log_dir = trailingslashit( $upload_dir['basedir'] ) . 'mvd-wai-ctrl-logs';
+	if ( is_dir( $log_dir ) ) {
+		$files = glob( $log_dir . '/*' );
+		if ( is_array( $files ) ) {
+			foreach ( $files as $file ) {
+				if ( is_file( $file ) ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+					unlink( $file );
+				}
+			}
+		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
+		rmdir( $log_dir );
+	}
+}

@@ -81,7 +81,37 @@ class MvdWaiCtrlAdminPage {
 				</div>
 			</div>
 
-			<div id="mvd-wai-ctrl-progress" class="mvd-wai-ctrl-card" style="<?php echo $is_running ? '' : 'display:none;'; ?>">
+			<div
+				id="mvd-wai-ctrl-error-banner"
+				class="mvd-wai-ctrl-error-banner"
+				<?php if ( 'error' !== $state['status'] ) : ?>style="display:none;"<?php endif; ?>
+			>
+				<strong class="mvd-wai-ctrl-error-title"><?php esc_html_e( 'Importazione interrotta', 'mvd-wai-ctrl' ); ?></strong>
+				<p class="mvd-wai-ctrl-error-message"><?php echo esc_html( (string) ( $state['crash_reason'] ?? $state['last_message'] ?? '' ) ); ?></p>
+				<p class="mvd-wai-ctrl-error-step">
+					<?php if ( 'error' === $state['status'] ) : ?>
+						<?php
+						$step_num = (int) $state['current_index'] + 1;
+						printf(
+							/* translators: 1: numero passo corrente, 2: totale passi */
+							esc_html__( 'Interrotto al passo %1$d di %2$d.', 'mvd-wai-ctrl' ),
+							esc_html( (string) $step_num ),
+							esc_html( (string) count( $import_ids ) )
+						);
+						?>
+					<?php endif; ?>
+				</p>
+				<div class="mvd-wai-ctrl-error-actions">
+					<button type="button" class="button button-primary" id="mvd-wai-ctrl-resume-btn">
+						<?php esc_html_e( 'Riprendi', 'mvd-wai-ctrl' ); ?>
+					</button>
+					<button type="button" class="button" id="mvd-wai-ctrl-reset-banner-btn">
+						<?php esc_html_e( 'Reset', 'mvd-wai-ctrl' ); ?>
+					</button>
+				</div>
+			</div>
+
+			<div id="mvd-wai-ctrl-progress" class="mvd-wai-ctrl-card" style="<?php echo ( $is_running || 'error' === $state['status'] ) ? '' : 'display:none;'; ?>">
 				<h2><?php esc_html_e( 'Progresso', 'mvd-wai-ctrl' ); ?></h2>
 				<div class="mvd-wai-ctrl-progress-bar-wrap">
 					<div

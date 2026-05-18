@@ -187,3 +187,40 @@ details summary {
 	color: #2271b1;
 	font-size: 12px;
 }
+
+/* Banner errore persistente */
+.mvd-wai-ctrl-error-banner {
+	background: #fbeaea;
+	border-left: 4px solid #d63638;
+	border-radius: 0 4px 4px 0;
+	padding: 14px 18px;
+	margin-top: 20px;
+}
+
+.mvd-wai-ctrl-error-banner .mvd-wai-ctrl-error-title {
+	display: block;
+	font-size: 14px;
+	color: #8a0000;
+	margin-bottom: 6px;
+}
+
+.mvd-wai-ctrl-error-banner .mvd-wai-ctrl-error-message {
+	margin: 0 0 4px;
+	font-size: 13px;
+	color: #50575e;
+	word-break: break-word;
+}
+
+.mvd-wai-ctrl-error-banner .mvd-wai-ctrl-error-step {
+	margin: 0 0 12px;
+	font-size: 12px;
+	color: #787c82;
+}
+
+.mvd-wai-ctrl-error-actions {
+	display: flex;
+	gap: 8px;
+}
+
+/* Badge crashed */
+.mvd-outcome-crashed { background: #fce8e8; color: #8a0000; }

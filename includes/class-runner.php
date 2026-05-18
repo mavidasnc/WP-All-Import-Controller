@@ -69,6 +69,38 @@ class MvdWaiCtrlRunner {
 		}
 		set_transient( MVD_WAI_CTRL_LOCK_KEY, 1, self::LOCK_TTL );
 
+		// Shutdown handler: intercetta fatal error / OOM prima che il processo muoia.
+		// Viene registrato subito dopo l'acquisizione del lock per catturare qualsiasi
+		// crash che avvenga da questo punto in poi, inclusi quelli dentro execute().
+		register_shutdown_function(
+			static function (): void {
+				$err = error_get_last();
+				$fatal_types = E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR;
+				if ( null === $err || ! ( $err['type'] & $fatal_types ) ) {
+					return;
+				}
+				$state = MvdWaiCtrlState::get();
+				// Interviene solo se il run è ancora marcato 'running' (evita doppia scrittura
+				// nel caso in cui il try/catch abbia già chiuso il run prima del fatal).
+				if ( 'running' !== $state['status'] ) {
+					return;
+				}
+				$run_id  = (int) $state['run_id'];
+				$message = sprintf(
+					/* translators: 1: tipo errore PHP, 2: messaggio, 3: file, 4: riga */
+					'Fatal PHP %1$s: %2$s in %3$s:%4$d',
+					$err['type'],
+					$err['message'],
+					$err['file'],
+					$err['line']
+				);
+				MvdWaiCtrlLogger::markRunCrashed( $run_id, $message );
+				MvdWaiCtrlLogger::writeFile( 'FATAL', $message, [ 'run_id' => $run_id ] );
+				MvdWaiCtrlState::markCrashed( $message );
+				delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+			}
+		);
+
 		// Forza PMXI a caricare le sue classi admin-only anche nel contesto wp-cron.
 		// Normalmente PMXI_Plugin::isAdminDashboardOrCronImport() richiede is_admin()=true
 		// oppure la presenza di $_GET['import_key'] / $_GET['action'].
@@ -116,7 +148,11 @@ class MvdWaiCtrlRunner {
 		};
 
 		$step_start     = time();
+		// È il primo chunk se non abbiamo ancora totale chunk (0 = non ancora iniziato).
+		// In caso di resume, $state['resuming'] è true: saltiamo il reset dei counter PMXI
+		// così PMXI riprende dal queue_chunk_number salvato nel suo record DB.
 		$is_first_chunk = 0 === (int) $state['current_step_total_chunks'];
+		$is_resuming    = ! empty( $state['resuming'] );
 		$schedule_next = false;
 		$chain_done    = false;
 
@@ -148,8 +184,11 @@ class MvdWaiCtrlRunner {
 				$import_id
 			);
 
-			// Al primo chunk: resetta i counter PMXI e registra timestamp di inizio.
-			if ( $is_first_chunk ) {
+			// Al primo chunk di un import nuovo: resetta i counter PMXI.
+			// In caso di resume ($is_resuming=true), i counter PMXI restano intatti:
+			// queue_chunk_number indica dove PMXI si era fermato e execute() riprenderà
+			// da quel punto automaticamente (PMXI record.php:332-336).
+			if ( $is_first_chunk && ! $is_resuming ) {
 				// PMXI riusa lo stesso record per ogni esecuzione: senza reset dei
 				// counter, una seconda chiamata a execute() esce senza processare nulla
 				// perché processing=1 stuck o imported>=count soddisfano subito la
@@ -174,6 +213,19 @@ class MvdWaiCtrlRunner {
 					$step_label,
 					__( 'Avvio importazione...', 'mvd-wai-ctrl' )
 				);
+			} elseif ( $is_first_chunk && $is_resuming ) {
+				// Resume: azzera il flag dopo la prima esecuzione, ma mantieni i counter PMXI.
+				// Aggiorna comunque lo step_label e riprendi il timestamp precedente.
+				$step_started_at = MvdWaiCtrlState::markStepStart();
+				MvdWaiCtrlState::updateStep(
+					$current_idx,
+					$step_label,
+					__( 'Ripresa importazione...', 'mvd-wai-ctrl' )
+				);
+				// Ricarica lo state aggiornato e imposta resuming=false per i chunk successivi.
+				$state_after             = MvdWaiCtrlState::get();
+				$state_after['resuming'] = false;
+				MvdWaiCtrlState::save( $state_after );
 			}
 
 			$import->execute( $logger, false, false );
@@ -242,6 +294,7 @@ class MvdWaiCtrlRunner {
 			$err_duration = $step_started_at
 				? max( 0, time() - (int) strtotime( $step_started_at ) )
 				: time() - $step_start;
+			$err_message  = $e->getMessage() . "\n" . implode( "\n", array_slice( $log_messages, -50 ) );
 			MvdWaiCtrlLogger::appendStep(
 				$run_id,
 				[
@@ -251,10 +304,20 @@ class MvdWaiCtrlRunner {
 					'outcome'      => 'error',
 					'duration_sec' => $err_duration,
 					'started_at'   => $step_started_at ?: current_time( 'mysql' ),
-					'message'      => $e->getMessage() . "\n" . implode( "\n", array_slice( $log_messages, -50 ) ),
+					'message'      => $err_message,
 				]
 			);
 			MvdWaiCtrlLogger::closeRun( $run_id, 'error' );
+			MvdWaiCtrlLogger::writeFile(
+				'ERROR',
+				$e->getMessage(),
+				[
+					'run_id'     => $run_id,
+					'step_index' => $current_idx,
+					'import_id'  => $import_id,
+					'exception'  => get_class( $e ),
+				]
+			);
 			MvdWaiCtrlState::finishRun( 'error', $e->getMessage() );
 		}
 

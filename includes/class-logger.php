@@ -141,10 +141,102 @@ class MvdWaiCtrlLogger {
 	}
 
 	/**
+	 * Chiude un run come "crashed" aggiungendo una riga step e aggiornando l'header.
+	 *
+	 * Usato da watchdog AJAX e shutdown handler per segnalare interruzione inattesa.
+	 *
+	 * @param int    $run_id  ID del run.
+	 * @param string $message Descrizione del crash.
+	 * @return void
+	 */
+	public static function markRunCrashed( int $run_id, string $message ): void {
+		self::appendStep(
+			$run_id,
+			[
+				'outcome' => 'crashed',
+				'message' => substr( $message, 0, 65535 ),
+			]
+		);
+		self::closeRun( $run_id, 'crashed' );
+	}
+
+	/**
+	 * Scrive una riga nel file di log giornaliero.
+	 *
+	 * Crea la cartella log (con .htaccess e index.php di protezione) al primo accesso.
+	 * Ruota per data (un file per giorno). Elimina opportunisticamente i file
+	 * più vecchi di MVD_WAI_CTRL_LOG_RETENTION_DAYS giorni.
+	 *
+	 * @param string               $level   Livello: 'INFO', 'ERROR', 'FATAL'.
+	 * @param string               $message Descrizione dell'evento.
+	 * @param array<string, mixed> $context Dati aggiuntivi serializzati in JSON.
+	 * @return void
+	 */
+	public static function writeFile( string $level, string $message, array $context = [] ): void {
+		$upload_dir = wp_upload_dir();
+		if ( ! empty( $upload_dir['error'] ) ) {
+			return;
+		}
+
+		$log_dir = trailingslashit( $upload_dir['basedir'] ) . MVD_WAI_CTRL_LOG_DIR;
+
+		// Crea la cartella con protezione accesso diretto.
+		if ( ! is_dir( $log_dir ) ) {
+			wp_mkdir_p( $log_dir );
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+			file_put_contents( $log_dir . '/.htaccess', 'deny from all' . PHP_EOL );
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+			file_put_contents( $log_dir . '/index.php', '<?php // Silence is golden.' . PHP_EOL );
+		}
+
+		$date     = gmdate( 'Y-m-d' );
+		$log_file = $log_dir . '/' . $date . '.log';
+		$ctx_json = ! empty( $context ) ? ' ' . wp_json_encode( $context ) : '';
+		$line     = sprintf(
+			'[%s] [%s] %s%s' . PHP_EOL,
+			gmdate( 'Y-m-d H:i:s' ),
+			strtoupper( $level ),
+			$message,
+			$ctx_json
+		);
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		file_put_contents( $log_file, $line, FILE_APPEND | LOCK_EX );
+
+		// Pulizia file obsoleti (eseguita opportunisticamente, max 1 volta per giorno).
+		$cleanup_key = 'mvd_wai_ctrl_log_cleanup_' . $date;
+		if ( ! get_transient( $cleanup_key ) ) {
+			set_transient( $cleanup_key, 1, DAY_IN_SECONDS );
+			self::pruneOldLogs( $log_dir );
+		}
+	}
+
+	/**
+	 * Elimina i file di log più vecchi di MVD_WAI_CTRL_LOG_RETENTION_DAYS giorni.
+	 *
+	 * @param string $log_dir Percorso assoluto della cartella log.
+	 * @return void
+	 */
+	private static function pruneOldLogs( string $log_dir ): void {
+		$retention = defined( 'MVD_WAI_CTRL_LOG_RETENTION_DAYS' ) ? (int) MVD_WAI_CTRL_LOG_RETENTION_DAYS : 30;
+		$cutoff    = time() - ( $retention * DAY_IN_SECONDS );
+		$files     = glob( $log_dir . '/*.log' );
+		if ( ! is_array( $files ) ) {
+			return;
+		}
+		foreach ( $files as $file ) {
+			if ( is_file( $file ) && filemtime( $file ) < $cutoff ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+				unlink( $file );
+			}
+		}
+	}
+
+	/**
 	 * Chiude un run aggiornando la riga di apertura con l'esito finale.
 	 *
 	 * @param int    $run_id  ID del run.
-	 * @param string $outcome Esito: 'success', 'error', 'aborted'.
+	 * @param string $outcome Esito: 'success', 'error', 'aborted', 'crashed'.
 	 * @return void
 	 */
 	public static function closeRun( int $run_id, string $outcome ): void {

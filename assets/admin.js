@@ -2,26 +2,37 @@
 ( function () {
 	'use strict';
 
-	var cfg         = mvdWaiCtrl;
-	var pollTimer   = null;
-	var startBtn    = null;
-	var resetBtn    = null;
-	var progressDiv = null;
-	var progressBar = null;
-	var progressLbl = null;
-	var chunkInfo   = null;
-	var lastMsg     = null;
-	var toast       = null;
+	var cfg              = mvdWaiCtrl;
+	var pollTimer        = null;
+	var pollFailures     = 0;   // contatore errori AJAX consecutivi del polling
+	var startBtn         = null;
+	var resetBtn         = null;
+	var progressDiv      = null;
+	var progressBar      = null;
+	var progressLbl      = null;
+	var chunkInfo        = null;
+	var lastMsg          = null;
+	var toast            = null;
+	var errorBanner      = null;
+	var errorMessage     = null;
+	var errorStep        = null;
+	var resumeBtn        = null;
+	var resetBannerBtn   = null;
 
 	document.addEventListener( 'DOMContentLoaded', function () {
-		startBtn    = document.getElementById( 'mvd-wai-ctrl-start-btn' );
-		resetBtn    = document.getElementById( 'mvd-wai-ctrl-reset-btn' );
-		progressDiv = document.getElementById( 'mvd-wai-ctrl-progress' );
-		progressBar = document.getElementById( 'mvd-wai-ctrl-progress-bar' );
-		progressLbl = document.getElementById( 'mvd-wai-ctrl-progress-label' );
-		chunkInfo   = document.getElementById( 'mvd-wai-ctrl-chunk-info' );
-		lastMsg     = document.getElementById( 'mvd-wai-ctrl-last-msg' );
-		toast       = document.getElementById( 'mvd-wai-ctrl-toast' );
+		startBtn       = document.getElementById( 'mvd-wai-ctrl-start-btn' );
+		resetBtn       = document.getElementById( 'mvd-wai-ctrl-reset-btn' );
+		progressDiv    = document.getElementById( 'mvd-wai-ctrl-progress' );
+		progressBar    = document.getElementById( 'mvd-wai-ctrl-progress-bar' );
+		progressLbl    = document.getElementById( 'mvd-wai-ctrl-progress-label' );
+		chunkInfo      = document.getElementById( 'mvd-wai-ctrl-chunk-info' );
+		lastMsg        = document.getElementById( 'mvd-wai-ctrl-last-msg' );
+		toast          = document.getElementById( 'mvd-wai-ctrl-toast' );
+		errorBanner    = document.getElementById( 'mvd-wai-ctrl-error-banner' );
+		resumeBtn      = document.getElementById( 'mvd-wai-ctrl-resume-btn' );
+		resetBannerBtn = document.getElementById( 'mvd-wai-ctrl-reset-banner-btn' );
+		errorMessage   = errorBanner ? errorBanner.querySelector( '.mvd-wai-ctrl-error-message' ) : null;
+		errorStep      = errorBanner ? errorBanner.querySelector( '.mvd-wai-ctrl-error-step' )    : null;
 
 		if ( startBtn ) {
 			startBtn.addEventListener( 'click', onStartClick );
@@ -31,9 +42,22 @@
 			resetBtn.addEventListener( 'click', onResetClick );
 		}
 
-		// Se al caricamento la pagina mostra il blocco progresso (status=running),
+		if ( resumeBtn ) {
+			resumeBtn.addEventListener( 'click', onResumeClick );
+		}
+
+		if ( resetBannerBtn ) {
+			resetBannerBtn.addEventListener( 'click', onResetClick );
+		}
+
+		// Se al caricamento la pagina mostra il blocco progresso (status=running o error),
 		// riavvia il polling automaticamente.
 		if ( progressDiv && progressDiv.style.display !== 'none' ) {
+			startPolling();
+		}
+		// Se al caricamento c'è già un banner di errore, avvia comunque il polling
+		// per sincronizzare lo stato (es. ricaricamento pagina dopo crash).
+		if ( errorBanner && errorBanner.style.display !== 'none' ) {
 			startPolling();
 		}
 	} );
@@ -65,6 +89,34 @@
 	}
 
 	/**
+	 * Gestisce il click sul pulsante "Riprendi" nel banner di errore.
+	 */
+	function onResumeClick() {
+		if ( resumeBtn ) {
+			resumeBtn.disabled    = true;
+			resumeBtn.textContent = cfg.i18n.resuming;
+		}
+
+		ajaxPost(
+			'mvd_wai_ctrl_resume',
+			cfg.nonceResume,
+			function () {
+				hideErrorBanner();
+				showProgress( true );
+				pollFailures = 0;
+				startPolling();
+			},
+			function ( err ) {
+				if ( resumeBtn ) {
+					resumeBtn.disabled    = false;
+					resumeBtn.textContent = 'Riprendi';
+				}
+				showToast( err || cfg.i18n.error, 'error' );
+			}
+		);
+	}
+
+	/**
 	 * Gestisce il click sul pulsante di reset stato bloccato.
 	 */
 	function onResetClick() {
@@ -77,6 +129,8 @@
 			cfg.nonceReset,
 			function () {
 				stopPolling();
+				pollFailures = 0;
+				hideErrorBanner();
 				showProgress( false );
 				if ( startBtn ) {
 					startBtn.disabled    = false;
@@ -122,10 +176,16 @@
 			'mvd_wai_ctrl_status',
 			cfg.nonceStatus,
 			function ( data ) {
+				pollFailures = 0;
 				updateUI( data );
 			},
 			function () {
-				// Silenzioso: riprova al prossimo tick.
+				pollFailures++;
+				// Dopo 3 fallimenti consecutivi mostra il banner di errore di rete.
+				if ( pollFailures >= 3 ) {
+					stopPolling();
+					showErrorBanner( cfg.i18n.networkError, '', false );
+				}
 			}
 		);
 	}
@@ -190,6 +250,16 @@
 			refreshRunsTable( data.runs );
 		}
 
+		// Banner errore: mostra/nascondi in base allo status.
+		if ( 'error' === status ) {
+			var stepNum   = ( parseInt( state.current_index, 10 ) || 0 ) + 1;
+			var stepTotal = parseInt( state.step_total, 10 ) || 4;
+			var stepText  = 'Interrotto al passo ' + stepNum + ' di ' + stepTotal + '.';
+			showErrorBanner( state.crash_reason || state.last_message || cfg.i18n.error, stepText, !! data.can_resume );
+		} else {
+			hideErrorBanner();
+		}
+
 		// Gestione stati terminali.
 		if ( 'completed' === status ) {
 			stopPolling();
@@ -197,7 +267,6 @@
 			showToast( cfg.i18n.completed, 'success' );
 		} else if ( 'error' === status ) {
 			stopPolling();
-			showToast( ( state.last_message || cfg.i18n.error ), 'error' );
 		}
 	}
 
@@ -209,6 +278,41 @@
 	function showProgress( show ) {
 		if ( progressDiv ) {
 			progressDiv.style.display = show ? '' : 'none';
+		}
+	}
+
+	/**
+	 * Mostra il banner di errore persistente sopra la progressbar.
+	 *
+	 * @param {string}  message     Messaggio di errore.
+	 * @param {string}  stepText    Informazione sul passo interrotto.
+	 * @param {boolean} canResume   Se true, mostra il pulsante Riprendi.
+	 */
+	function showErrorBanner( message, stepText, canResume ) {
+		if ( ! errorBanner ) {
+			return;
+		}
+		if ( errorMessage ) {
+			errorMessage.textContent = message || '';
+		}
+		if ( errorStep ) {
+			errorStep.textContent = stepText || '';
+		}
+		if ( resumeBtn ) {
+			resumeBtn.style.display  = canResume ? '' : 'none';
+			resumeBtn.disabled       = false;
+			resumeBtn.textContent    = 'Riprendi';
+		}
+		errorBanner.style.display = '';
+		showProgress( true );
+	}
+
+	/**
+	 * Nasconde il banner di errore.
+	 */
+	function hideErrorBanner() {
+		if ( errorBanner ) {
+			errorBanner.style.display = 'none';
 		}
 	}
 

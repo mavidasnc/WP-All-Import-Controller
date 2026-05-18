@@ -34,6 +34,8 @@ class MvdWaiCtrlState {
 			'updated_at'                => '',
 			'finished_at'               => null,
 			'last_message'              => '',
+			'resuming'                  => false,  // true → il prossimo runStep salta il reset PMXI counters
+			'crash_reason'              => null,   // messaggio popolato da watchdog o shutdown handler
 		];
 	}
 
@@ -196,6 +198,38 @@ class MvdWaiCtrlState {
 		if ( $message ) {
 			$state['last_message'] = $message;
 		}
+		self::save( $state );
+	}
+
+	/**
+	 * Segna il run come interrotto in modo inatteso (da watchdog o shutdown handler).
+	 *
+	 * @param string $reason Descrizione dell'interruzione.
+	 * @return void
+	 */
+	public static function markCrashed( string $reason ): void {
+		$state                 = self::get();
+		$state['status']       = 'error';
+		$state['last_message'] = $reason;
+		$state['crash_reason'] = $reason;
+		$state['finished_at']  = current_time( 'mysql' );
+		self::save( $state );
+	}
+
+	/**
+	 * Prepara lo stato per riprendere un run interrotto dal punto corrente.
+	 *
+	 * Imposta resuming=true in modo che il prossimo runStep salti il reset
+	 * dei counter PMXI, consentendo la ripresa dal queue_chunk_number salvato.
+	 *
+	 * @return void
+	 */
+	public static function markResumeRequested(): void {
+		$state                 = self::get();
+		$state['status']       = 'running';
+		$state['resuming']     = true;
+		$state['crash_reason'] = null;
+		$state['finished_at']  = null;
 		self::save( $state );
 	}
 }

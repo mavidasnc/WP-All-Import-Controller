@@ -21,6 +21,12 @@ define( 'MVD_WAI_CTRL_IDS',          [ 13, 2, 1, 14 ] );
 defined( 'ARRAY_A' )           || define( 'ARRAY_A',           'ARRAY_A' );
 defined( 'OBJECT' )            || define( 'OBJECT',            'OBJECT' );
 defined( 'MINUTE_IN_SECONDS' ) || define( 'MINUTE_IN_SECONDS', 60 );
+defined( 'DAY_IN_SECONDS' )    || define( 'DAY_IN_SECONDS',    86400 );
+
+// Nuove costanti del plugin per error handling e log.
+define( 'MVD_WAI_CTRL_WATCHDOG_THRESHOLD', 180 );
+define( 'MVD_WAI_CTRL_LOG_DIR',            'mvd-wai-ctrl-logs' );
+define( 'MVD_WAI_CTRL_LOG_RETENTION_DAYS', 30 );
 
 // Autoload Composer (PHPUnit, Brain Monkey, Mockery).
 require_once dirname( __DIR__ ) . '/vendor/autoload.php';

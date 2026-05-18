@@ -3,7 +3,7 @@
  * Plugin Name:       MVD WP All Import Controller
  * Plugin URI:        https://github.com/mavidasnc/WP-All-Import-Controller
  * Description:       Esegue 4 importazioni WP All Import Pro in sequenza con un solo click, stop al primo errore e log persistente.
- * Version:           1.3.3
+ * Version:           1.4.0
  * Requires at least: 6.0
  * Requires PHP:      8.1
  * Author:            Mavida
@@ -23,7 +23,7 @@ if ( file_exists( __DIR__ . '/vendor/autoload.php' ) ) {
 
 // ── Costanti ──────────────────────────────────────────────────────────────────
 
-define( 'MVD_WAI_CTRL_VERSION',       '1.3.3' );
+define( 'MVD_WAI_CTRL_VERSION',       '1.4.0' );
 define( 'MVD_WAI_CTRL_DB_VERSION',    '1.3.0' ); // aggiornare solo quando cambia lo schema DB
 define( 'MVD_WAI_CTRL_DIR',           plugin_dir_path( __FILE__ ) );
 define( 'MVD_WAI_CTRL_URL',           plugin_dir_url( __FILE__ ) );
@@ -31,6 +31,9 @@ define( 'MVD_WAI_CTRL_CRON_HOOK',     'mvd_wai_ctrl_run' );
 define( 'MVD_WAI_CTRL_STATE_OPTION',  'mvd_wai_ctrl_state' );
 define( 'MVD_WAI_CTRL_LOCK_KEY',      'mvd_wai_ctrl_running_lock' );
 define( 'MVD_WAI_CTRL_CAPABILITY',    'manage_options' );
+define( 'MVD_WAI_CTRL_WATCHDOG_THRESHOLD', 180 ); // secondi senza heartbeat prima di dichiarare il cron morto
+define( 'MVD_WAI_CTRL_LOG_DIR',            'mvd-wai-ctrl-logs' ); // sotto wp-content/uploads
+define( 'MVD_WAI_CTRL_LOG_RETENTION_DAYS', 30 );
 
 /**
  * ID delle importazioni WP All Import Pro da eseguire in ordine.

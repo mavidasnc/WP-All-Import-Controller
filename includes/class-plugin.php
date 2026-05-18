@@ -26,6 +26,7 @@ class MvdWaiCtrlPlugin {
 		add_action( 'wp_ajax_mvd_wai_ctrl_start',  [ __CLASS__, 'ajaxStart' ] );
 		add_action( 'wp_ajax_mvd_wai_ctrl_status', [ __CLASS__, 'ajaxStatus' ] );
 		add_action( 'wp_ajax_mvd_wai_ctrl_reset',  [ __CLASS__, 'ajaxReset' ] );
+		add_action( 'wp_ajax_mvd_wai_ctrl_resume', [ __CLASS__, 'ajaxResume' ] );
 
 		// Hook cron one-time (fallback nel caso il loopback non sia disponibile).
 		add_action( MVD_WAI_CTRL_CRON_HOOK, [ 'MvdWaiCtrlRunner', 'runStep' ] );
@@ -86,13 +87,17 @@ class MvdWaiCtrlPlugin {
 				'nonceStart'   => wp_create_nonce( 'mvd_wai_ctrl_start' ),
 				'nonceStatus'  => wp_create_nonce( 'mvd_wai_ctrl_status' ),
 				'nonceReset'   => wp_create_nonce( 'mvd_wai_ctrl_reset' ),
+				'nonceResume'  => wp_create_nonce( 'mvd_wai_ctrl_resume' ),
 				'pollInterval' => 3000,
 				'i18n'         => [
-					'starting'   => __( 'Avvio in corso...', 'mvd-wai-ctrl' ),
-					'running'    => __( 'Esecuzione in corso...', 'mvd-wai-ctrl' ),
-					'completed'  => __( 'Completato con successo!', 'mvd-wai-ctrl' ),
-					'error'      => __( 'Errore durante l\'esecuzione.', 'mvd-wai-ctrl' ),
-					'confirmRun' => __( 'Avviare le 4 importazioni sequenziali? L\'operazione non può essere interrotta.', 'mvd-wai-ctrl' ),
+					'starting'        => __( 'Avvio in corso...', 'mvd-wai-ctrl' ),
+					'running'         => __( 'Esecuzione in corso...', 'mvd-wai-ctrl' ),
+					'completed'       => __( 'Completato con successo!', 'mvd-wai-ctrl' ),
+					'error'           => __( 'Errore durante l\'esecuzione.', 'mvd-wai-ctrl' ),
+					'confirmRun'      => __( 'Avviare le 4 importazioni sequenziali? L\'operazione non può essere interrotta.', 'mvd-wai-ctrl' ),
+					'networkError'    => __( 'Impossibile contattare il server. Verificare la connessione.', 'mvd-wai-ctrl' ),
+					'resuming'        => __( 'Ripresa in corso...', 'mvd-wai-ctrl' ),
+					'crashedTitle'    => __( 'Importazione interrotta', 'mvd-wai-ctrl' ),
 				],
 			]
 		);
@@ -196,6 +201,9 @@ class MvdWaiCtrlPlugin {
 	/**
 	 * Handler AJAX per leggere lo stato corrente dell'esecuzione.
 	 *
+	 * Esegue anche il watchdog: se lo stato è 'running' ma non c'è heartbeat recente
+	 * e il lock transient è assente, marca il run come crashed.
+	 *
 	 * @return void
 	 */
 	public static function ajaxStatus(): void {
@@ -206,12 +214,98 @@ class MvdWaiCtrlPlugin {
 		}
 
 		$state = MvdWaiCtrlState::get();
-		$runs  = MvdWaiCtrlLogger::getRecentRuns( 20 );
+
+		// Watchdog: rileva cron morto senza heartbeat.
+		if (
+			'running' === $state['status']
+			&& ! empty( $state['updated_at'] )
+			&& ( time() - (int) strtotime( $state['updated_at'] ) ) > MVD_WAI_CTRL_WATCHDOG_THRESHOLD
+			&& ! get_transient( MVD_WAI_CTRL_LOCK_KEY )
+		) {
+			$elapsed = time() - (int) strtotime( $state['updated_at'] );
+			$reason  = sprintf(
+				/* translators: %d: secondi dall'ultimo heartbeat */
+				__( 'Cron interrotto: nessun heartbeat da %d secondi.', 'mvd-wai-ctrl' ),
+				$elapsed
+			);
+			$run_id = (int) $state['run_id'];
+			MvdWaiCtrlLogger::markRunCrashed( $run_id, $reason );
+			MvdWaiCtrlLogger::writeFile( 'ERROR', $reason, [ 'run_id' => $run_id ] );
+			MvdWaiCtrlState::markCrashed( $reason );
+			$state = MvdWaiCtrlState::get();
+		}
+
+		$can_resume = (
+			'error' === $state['status']
+			&& (int) $state['current_index'] < count( MVD_WAI_CTRL_IDS )
+		);
+
+		$runs = MvdWaiCtrlLogger::getRecentRuns( 20 );
 
 		wp_send_json_success(
 			[
-				'state' => $state,
-				'runs'  => $runs,
+				'state'      => $state,
+				'runs'       => $runs,
+				'can_resume' => $can_resume,
+			]
+		);
+	}
+
+	/**
+	 * Handler AJAX per riprendere un run interrotto dal punto di interruzione.
+	 *
+	 * Riprende da current_index senza resettare i counter PMXI, sfruttando
+	 * la resumability nativa di PMXI_Import_Record (queue_chunk_number persistente).
+	 *
+	 * @return void
+	 */
+	public static function ajaxResume(): void {
+		check_ajax_referer( 'mvd_wai_ctrl_resume' );
+
+		if ( ! current_user_can( MVD_WAI_CTRL_CAPABILITY ) ) {
+			wp_send_json_error( [ 'message' => __( 'Permesso negato.', 'mvd-wai-ctrl' ) ], 403 );
+		}
+
+		$state = MvdWaiCtrlState::get();
+
+		if ( 'error' !== $state['status'] ) {
+			wp_send_json_error(
+				[ 'message' => __( 'Nessun run interrotto da riprendere.', 'mvd-wai-ctrl' ) ],
+				400
+			);
+		}
+
+		if ( (int) $state['current_index'] >= count( MVD_WAI_CTRL_IDS ) ) {
+			wp_send_json_error(
+				[ 'message' => __( 'Tutti i passi sono già stati completati.', 'mvd-wai-ctrl' ) ],
+				400
+			);
+		}
+
+		$run_id      = (int) $state['run_id'];
+		$step_index  = (int) $state['current_index'];
+
+		// Aggiunge una riga nel log per tracciare la ripresa.
+		MvdWaiCtrlLogger::appendStep(
+			$run_id,
+			[
+				'step_index' => $step_index,
+				'outcome'    => 'start',
+				'message'    => sprintf(
+					/* translators: %d: numero passo 1-based */
+					__( 'Ripresa dal passo %d.', 'mvd-wai-ctrl' ),
+					$step_index + 1
+				),
+			]
+		);
+
+		MvdWaiCtrlState::markResumeRequested();
+		MvdWaiCtrlRunner::scheduleSelf();
+
+		wp_send_json_success(
+			[
+				'run_id'  => $run_id,
+				'message' => __( 'Ripresa avviata.', 'mvd-wai-ctrl' ),
 			]
 		);
 	}
