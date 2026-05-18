@@ -31,7 +31,7 @@ class MvdWaiCtrlState {
 			'current_total_records'     => 0,
 			'current_step_started_at'   => '',
 			'started_at'                => '',
-			'updated_at'                => '',
+			'updated_at'                => 0,
 			'finished_at'               => null,
 			'last_message'              => '',
 			'resuming'                  => false,  // true → il prossimo runStep salta il reset PMXI counters
@@ -50,7 +50,14 @@ class MvdWaiCtrlState {
 		if ( ! is_array( $raw ) ) {
 			return self::defaultState();
 		}
-		return array_merge( self::defaultState(), $raw );
+		$state = array_merge( self::defaultState(), $raw );
+
+		// Migrazione: converte updated_at da stringa MySQL (formato precedente alla v1.5.1) a unix timestamp UTC.
+		if ( isset( $state['updated_at'] ) && is_string( $state['updated_at'] ) && '' !== $state['updated_at'] ) {
+			$state['updated_at'] = (int) strtotime( $state['updated_at'] . ' UTC' );
+		}
+
+		return $state;
 	}
 
 	/**
@@ -60,7 +67,7 @@ class MvdWaiCtrlState {
 	 * @return void
 	 */
 	public static function save( array $state ): void {
-		$state['updated_at'] = current_time( 'mysql' );
+		$state['updated_at'] = time();
 		update_option( MVD_WAI_CTRL_STATE_OPTION, $state, false );
 	}
 

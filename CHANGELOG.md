@@ -4,6 +4,11 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [1.5.1] - 2026-05-18
+
+### Fixed
+- **Watchdog 180s non scattava**: `MvdWaiCtrlState::save()` usava `current_time('mysql')` per `updated_at`, che restituisce l'orario nel fuso del sito WordPress. Il watchdog in `ajaxStatus()` confrontava il valore con `time()` (sempre UTC) tramite `strtotime()`, che lo interpretava nel fuso PHP del processo. Su hosting con `date.timezone=UTC` e WordPress impostato su `Europe/Rome`, il delta risultava negativo (fino a −7200 s in DST), rendendo la condizione `> 180` sempre falsa. Soluzione: `updated_at` è ora salvato come **unix timestamp intero UTC** (`time()`), eliminando qualsiasi conversione di fuso. Aggiunta migrazione in `State::get()` che converte il vecchio formato stringa MySQL al volo.
+
 ## [1.5.0] - 2026-05-18
 
 ### Fixed

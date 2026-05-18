@@ -183,6 +183,98 @@ class PluginTest extends TestCase {
 		\MvdWaiCtrlPlugin::ajaxStatus();
 	}
 
+	public function test_ajax_status_watchdog_crashes_dead_run(): void {
+		Functions\when( 'check_ajax_referer' )->justReturn( true );
+		Functions\when( 'current_user_can' )->justReturn( true );
+
+		// Stato: running con heartbeat più vecchio di 180s.
+		$old_updated_at = time() - 200;
+		Functions\when( 'get_option' )->justReturn( [
+			'status'        => 'running',
+			'updated_at'    => $old_updated_at,
+			'run_id'        => 99,
+			'current_index' => 0,
+		] );
+
+		// Nessun lock attivo → watchdog può scattare.
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
+
+		// Funzioni WP usate da markRunCrashed(), writeFile(), markCrashed().
+		// wp_upload_dir, wp_mkdir_p, trailingslashit, wp_json_encode sono già definite in wpdb-stub.php.
+		Functions\when( 'sanitize_key' )->returnArg();
+		Functions\when( 'current_time' )->justReturn( '2026-05-18 12:00:00' );
+
+		// update_option deve essere chiamato con stato crashed.
+		Functions\expect( 'update_option' )
+			->atLeast()->once()
+			->with(
+				MVD_WAI_CTRL_STATE_OPTION,
+				Mockery::on( fn( $v ) => 'error' === $v['status'] && ! empty( $v['crash_reason'] ) ),
+				false
+			);
+
+		// DB: appendStep (insert) + closeRun (update) + getRecentRuns (prepare + get_results).
+		global $wpdb;
+		$wpdb->shouldReceive( 'insert' )->once()->andReturn( 1 );
+		$wpdb->insert_id = 1;
+		$wpdb->shouldReceive( 'update' )->once()->andReturn( 1 );
+		$wpdb->shouldReceive( 'prepare' )->andReturn( 'SQL' );
+		$wpdb->shouldReceive( 'get_results' )->andReturn( [] );
+
+		$success_called = false;
+		Functions\when( 'wp_send_json_success' )->alias(
+			function () use ( &$success_called ): void {
+				$success_called = true;
+				throw new \RuntimeException( 'wp_send_json_success' );
+			}
+		);
+
+		try {
+			\MvdWaiCtrlPlugin::ajaxStatus();
+		} catch ( \RuntimeException $e ) {
+			$this->assertSame( 'wp_send_json_success', $e->getMessage() );
+		}
+
+		$this->assertTrue( $success_called, 'Il watchdog dovrebbe chiamare wp_send_json_success dopo aver marcato il run come crashed.' );
+	}
+
+	public function test_ajax_status_watchdog_ignores_recent_run(): void {
+		Functions\when( 'check_ajax_referer' )->justReturn( true );
+		Functions\when( 'current_user_can' )->justReturn( true );
+
+		// Stato: running con heartbeat recente (100s < 180s).
+		Functions\when( 'get_option' )->justReturn( [
+			'status'     => 'running',
+			'updated_at' => time() - 100,
+			'run_id'     => 5,
+		] );
+
+		// Lock assente — ma il threshold non è superato, il watchdog non deve scattare.
+		Functions\when( 'get_transient' )->justReturn( false );
+
+		global $wpdb;
+		$wpdb->shouldReceive( 'prepare' )->andReturn( 'SQL' );
+		$wpdb->shouldReceive( 'get_results' )->andReturn( [] );
+
+		$success_data = null;
+		Functions\when( 'wp_send_json_success' )->alias(
+			function ( $data ) use ( &$success_data ): void {
+				$success_data = $data;
+				throw new \RuntimeException( 'wp_send_json_success' );
+			}
+		);
+
+		try {
+			\MvdWaiCtrlPlugin::ajaxStatus();
+		} catch ( \RuntimeException $e ) {
+			$this->assertSame( 'wp_send_json_success', $e->getMessage() );
+		}
+
+		// Il watchdog non deve aver cambiato lo stato.
+		$this->assertSame( 'running', $success_data['state']['status'] );
+	}
+
 	public function test_ajax_status_returns_state_and_runs(): void {
 		Functions\when( 'check_ajax_referer' )->justReturn( true );
 		Functions\when( 'current_user_can' )->justReturn( true );

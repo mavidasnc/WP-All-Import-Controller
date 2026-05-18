@@ -50,13 +50,12 @@ class StateTest extends TestCase {
 	}
 
 	public function test_save_persists_state_with_no_autoload(): void {
-		Functions\expect( 'current_time' )->once()->andReturn( '2024-01-01 12:00:00' );
 		Functions\expect( 'update_option' )
 			->once()
 			->with(
 				MVD_WAI_CTRL_STATE_OPTION,
 				Mockery::on(
-					fn( $v ) => 'running' === $v['status'] && '2024-01-01 12:00:00' === $v['updated_at']
+					fn( $v ) => 'running' === $v['status'] && is_int( $v['updated_at'] ) && $v['updated_at'] > 0
 				),
 				false
 			);

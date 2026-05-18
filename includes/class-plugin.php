@@ -219,10 +219,10 @@ class MvdWaiCtrlPlugin {
 		if (
 			'running' === $state['status']
 			&& ! empty( $state['updated_at'] )
-			&& ( time() - (int) strtotime( $state['updated_at'] ) ) > MVD_WAI_CTRL_WATCHDOG_THRESHOLD
+			&& ( time() - (int) $state['updated_at'] ) > MVD_WAI_CTRL_WATCHDOG_THRESHOLD
 			&& ! get_transient( MVD_WAI_CTRL_LOCK_KEY )
 		) {
-			$elapsed = time() - (int) strtotime( $state['updated_at'] );
+			$elapsed = time() - (int) $state['updated_at'];
 			$reason  = sprintf(
 				/* translators: %d: secondi dall'ultimo heartbeat */
 				__( 'Cron interrotto: nessun heartbeat da %d secondi.', 'mvd-wai-ctrl' ),
