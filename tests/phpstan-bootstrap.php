@@ -19,3 +19,6 @@ define( 'MVD_WAI_CTRL_IDS',          [ 13, 2, 1, 14 ] );
 if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 	require_once __DIR__ . '/stubs/pmxi-stubs.php';
 }
+if ( ! class_exists( 'PMXI_History_Record' ) ) {
+	require_once __DIR__ . '/stubs/pmxi-history-record.php';
+}

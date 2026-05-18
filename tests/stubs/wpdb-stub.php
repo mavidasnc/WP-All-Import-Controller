@@ -61,6 +61,10 @@ if ( ! class_exists( 'wpdb' ) ) {
 		public function get_results( ?string $query = null, string $output = 'OBJECT' ): array|object|null {
 			return [];
 		}
+
+		public function get_row( ?string $query = null, string $output = 'OBJECT', int $y = 0 ): array|object|null {
+			return null;
+		}
 	}
 	// phpcs:enable
 }

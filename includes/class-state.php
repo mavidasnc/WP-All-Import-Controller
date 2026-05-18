@@ -36,6 +36,7 @@ class MvdWaiCtrlState {
 			'last_message'              => '',
 			'resuming'                  => false,  // true → il prossimo runStep salta il reset PMXI counters
 			'crash_reason'              => null,   // messaggio popolato da watchdog o shutdown handler
+			'current_step_history_log_id' => 0,   // ID del record wp_pmxi_history per lo step corrente
 		];
 	}
 
@@ -174,11 +175,12 @@ class MvdWaiCtrlState {
 			return false;
 		}
 
-		$state['current_index']             = $next_index;
-		$state['current_chunk_done']        = 0;
-		$state['current_step_total_chunks'] = 0;
-		$state['current_total_records']     = 0;
-		$state['current_step_started_at']   = '';
+		$state['current_index']               = $next_index;
+		$state['current_chunk_done']          = 0;
+		$state['current_step_total_chunks']   = 0;
+		$state['current_total_records']       = 0;
+		$state['current_step_started_at']     = '';
+		$state['current_step_history_log_id'] = 0;
 		self::save( $state );
 
 		return true;
@@ -214,6 +216,33 @@ class MvdWaiCtrlState {
 		$state['crash_reason'] = $reason;
 		$state['finished_at']  = current_time( 'mysql' );
 		self::save( $state );
+	}
+
+	/**
+	 * Salva l'ID del record wp_pmxi_history associato allo step corrente.
+	 *
+	 * Va chiamato al primo chunk di ogni import, subito dopo aver creato
+	 * il record PMXI_History_Record. L'ID viene riletto a ogni chunk
+	 * successivo tramite getStepHistoryLogId().
+	 *
+	 * @param int $id ID del record PMXI_History_Record appena creato.
+	 * @return void
+	 */
+	public static function setStepHistoryLogId( int $id ): void {
+		$state                                = self::get();
+		$state['current_step_history_log_id'] = $id;
+		self::save( $state );
+	}
+
+	/**
+	 * Restituisce l'ID del record wp_pmxi_history per lo step corrente.
+	 *
+	 * Ritorna 0 se non è ancora stato creato (primo chunk non ancora eseguito).
+	 *
+	 * @return int ID del record PMXI_History_Record, oppure 0.
+	 */
+	public static function getStepHistoryLogId(): int {
+		return (int) ( self::get()['current_step_history_log_id'] ?? 0 );
 	}
 
 	/**

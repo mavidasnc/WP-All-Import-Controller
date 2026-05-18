@@ -13,3 +13,4 @@ parameters:
 
     scanFiles:
         - tests/stubs/pmxi-stubs.php
+        - tests/stubs/pmxi-history-record.php

@@ -34,6 +34,7 @@ require_once dirname( __DIR__ ) . '/vendor/autoload.php';
 // Stub per le classi esterne non disponibili nell'ambiente di test.
 require_once __DIR__ . '/stubs/wpdb-stub.php';
 require_once __DIR__ . '/stubs/pmxi-stubs.php';
+require_once __DIR__ . '/stubs/pmxi-history-record.php';
 
 // Carica le classi del plugin (esclude il file principale che richiede ABSPATH WP completo).
 require_once dirname( __DIR__ ) . '/includes/class-state.php';

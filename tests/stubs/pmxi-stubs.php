@@ -16,6 +16,7 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 
 		private static int $call_index = 0;
 
+		public int    $id               = 0;
 		public string $name              = '';
 		public string $friendly_name    = '';
 		public int    $created          = 0;

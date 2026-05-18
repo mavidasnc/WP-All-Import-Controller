@@ -23,3 +23,6 @@ Thumbs.db
 # Plugin di terze parti presenti in locale solo come riferimento
 /wp-all-import-pro/
 /wpml-all-import/
+
+# Cartella di debug locale
+/debug/

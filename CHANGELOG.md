@@ -4,6 +4,14 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [1.5.0] - 2026-05-18
+
+### Fixed
+- **Resume con cron PMXI ancora attivo**: al click di "Riprendi", prima di lanciare il loopback, vengono ora resettati i flag runtime PMXI (`triggered`, `processing`, `executing`) sull'import corrente e si attende 3 secondi. Questo evita che un cron PMXI residuo blocchi la ripartenza, che prima richiedeva un reset manuale dalla UI di WP All Import Pro. `queue_chunk_number` e i counter restano intatti, così l'import riprende dal record esatto in cui si era interrotto.
+
+### Added
+- **History nativa WP All Import Pro**: ogni import della chain genera ora un record `wp_pmxi_history` (type `processing`) e il relativo file HTML in `uploads/wpallimport/logs/{history_id}/`. Il log è appendito chunk-per-chunk, compatibile con import multi-chunk. I record eccedenti la soglia `log_storage` vengono rimossi prima di ogni nuova esecuzione. In caso di resume dopo un crash, il record history esistente viene riutilizzato.
+
 ## [1.4.0] - 2026-05-18
 
 ### Added

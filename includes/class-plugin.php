@@ -282,8 +282,47 @@ class MvdWaiCtrlPlugin {
 			);
 		}
 
-		$run_id      = (int) $state['run_id'];
-		$step_index  = (int) $state['current_index'];
+		$run_id     = (int) $state['run_id'];
+		$step_index = (int) $state['current_index'];
+
+		// Forza l'arresto dei flag runtime PMXI (triggered/processing/executing) sull'import corrente.
+		// Se il cron PMXI è ancora attivo sulla riga, execute() non ripartirebbe fino al rilascio
+		// spontaneo dei flag. Il reset è limitato ai 3 flag di esecuzione: queue_chunk_number e i
+		// counter restano intatti così PMXI riprende dal record esatto dove si era fermato.
+		$ids_resume        = MVD_WAI_CTRL_IDS;
+		$import_id_resume  = isset( $ids_resume[ $step_index ] ) ? (int) $ids_resume[ $step_index ] : null;
+		if ( null !== $import_id_resume ) {
+			$stop_result = MvdWaiCtrlRunner::forceStopPmxiCron( $import_id_resume );
+			if ( $stop_result['ok'] ) {
+				$before = $stop_result['before'];
+				MvdWaiCtrlLogger::appendStep(
+					$run_id,
+					[
+						'step_index' => $step_index,
+						'import_id'  => $import_id_resume,
+						'outcome'    => 'info',
+						'message'    => sprintf(
+							/* translators: 1: ID import, 2: triggered prima del reset, 3: processing prima del reset, 4: executing prima del reset */
+							__( 'Reset flag PMXI runtime prima del resume (import_id=%1$d, before: triggered=%2$d, processing=%3$d, executing=%4$d).', 'mvd-wai-ctrl' ),
+							$import_id_resume,
+							(int) $before['triggered'],
+							(int) $before['processing'],
+							(int) $before['executing']
+						),
+					]
+				);
+				MvdWaiCtrlLogger::writeFile(
+					'INFO',
+					sprintf( 'forceStopPmxiCron import_id=%d', $import_id_resume ),
+					[
+						'run_id' => $run_id,
+						'before' => $before,
+					]
+				);
+			}
+		}
+		// Attesa breve: lascia il tempo a un eventuale tick PMXI ancora in volo di terminare.
+		sleep( 3 );
 
 		// Aggiunge una riga nel log per tracciare la ripresa.
 		MvdWaiCtrlLogger::appendStep(

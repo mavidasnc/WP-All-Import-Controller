@@ -153,8 +153,10 @@ class MvdWaiCtrlRunner {
 		// così PMXI riprende dal queue_chunk_number salvato nel suo record DB.
 		$is_first_chunk = 0 === (int) $state['current_step_total_chunks'];
 		$is_resuming    = ! empty( $state['resuming'] );
-		$schedule_next = false;
-		$chain_done    = false;
+		$schedule_next  = false;
+		$chain_done     = false;
+		// Numero di history da conservare per import (opzione nativa WPAI, default 5).
+		$log_storage    = class_exists( 'PMXI_Plugin' ) ? (int) PMXI_Plugin::getInstance()->getOption( 'log_storage' ) : 0;
 
 		try {
 			$import = new PMXI_Import_Record();
@@ -207,6 +209,41 @@ class MvdWaiCtrlRunner {
 					]
 				)->update();
 
+				// Cleanup history eccedenti log_storage per questo import (pattern src/Scheduling/Import.php:37-49).
+				if ( $log_storage > 0 && class_exists( 'PMXI_History_List' ) ) {
+					$history_cleanup = new PMXI_History_List();
+					$history_cleanup->setColumns( 'id' )->getBy( [ 'import_id' => $import->id ], 'id ASC' );
+					if ( $history_cleanup->count() >= $log_storage ) {
+						$logs_to_remove = $history_cleanup->count() - $log_storage;
+						$i              = 0;
+						foreach ( $history_cleanup as $old_file ) {
+							$old_rec = new PMXI_History_Record();
+							$old_rec->getBy( 'id', $old_file['id'] );
+							if ( ! $old_rec->isEmpty() ) {
+								$old_rec->delete();
+							}
+							if ( $i++ >= $logs_to_remove ) {
+								break;
+							}
+						}
+					}
+				}
+
+				// Crea il record history nativo di WP All Import per questo step.
+				// Type 'processing': allineato a src/Scheduling/Import.php:58 (esecuzione da loopback/cron).
+				if ( class_exists( 'PMXI_History_Record' ) ) {
+					$history_log = new PMXI_History_Record();
+					$history_log->set(
+						[
+							'import_id' => $import->id,
+							'date'      => date( 'Y-m-d H:i:s' ),
+							'type'      => 'processing',
+							'summary'   => __( 'mvd controller processing', 'mvd-wai-ctrl' ),
+						]
+					)->save();
+					MvdWaiCtrlState::setStepHistoryLogId( (int) $history_log->id );
+				}
+
 				$step_started_at = MvdWaiCtrlState::markStepStart();
 				MvdWaiCtrlState::updateStep(
 					$current_idx,
@@ -216,6 +253,21 @@ class MvdWaiCtrlRunner {
 			} elseif ( $is_first_chunk && $is_resuming ) {
 				// Resume: azzera il flag dopo la prima esecuzione, ma mantieni i counter PMXI.
 				// Aggiorna comunque lo step_label e riprendi il timestamp precedente.
+				// Se il crash è avvenuto prima della creazione dell'history record (history_log_id = 0),
+				// ne creiamo uno nuovo per garantire che il log del resume sia tracciato.
+				if ( 0 === MvdWaiCtrlState::getStepHistoryLogId() && class_exists( 'PMXI_History_Record' ) ) {
+					$history_log = new PMXI_History_Record();
+					$history_log->set(
+						[
+							'import_id' => $import->id,
+							'date'      => date( 'Y-m-d H:i:s' ),
+							'type'      => 'processing',
+							'summary'   => __( 'mvd controller processing (resume)', 'mvd-wai-ctrl' ),
+						]
+					)->save();
+					MvdWaiCtrlState::setStepHistoryLogId( (int) $history_log->id );
+				}
+
 				$step_started_at = MvdWaiCtrlState::markStepStart();
 				MvdWaiCtrlState::updateStep(
 					$current_idx,
@@ -228,7 +280,36 @@ class MvdWaiCtrlRunner {
 				MvdWaiCtrlState::save( $state_after );
 			}
 
-			$import->execute( $logger, false, false );
+			// Prepara il path del file HTML di log nativo WPAI per questo step.
+			// Tutti i chunk dello stesso import appendono allo stesso file (fopen 'a+').
+			$history_log_id = MvdWaiCtrlState::getStepHistoryLogId();
+			$log_file_path  = '';
+			if ( $log_storage > 0 && $history_log_id > 0 && function_exists( 'wp_all_import_secure_file' ) ) {
+				$wp_uploads    = wp_upload_dir();
+				$log_file_path = wp_all_import_secure_file(
+					$wp_uploads['basedir'] . DIRECTORY_SEPARATOR . PMXI_Plugin::LOGS_DIRECTORY,
+					$history_log_id
+				) . DIRECTORY_SEPARATOR . $history_log_id . '.html';
+			}
+
+			// Esegue l'import bufferizzando l'output per il file HTML di log WPAI
+			// (pattern src/Scheduling/Import.php:71-88). Il finally garantisce che
+			// ob_get_clean() venga chiamato anche se execute() lancia un'eccezione.
+			$log_html = '';
+			ob_start();
+			try {
+				$import->execute( $logger, true, $history_log_id > 0 ? $history_log_id : false );
+			} finally {
+				$log_html = (string) ob_get_clean();
+			}
+
+			if ( '' !== $log_file_path && '' !== $log_html ) {
+				$fh = @fopen( $log_file_path, 'a+' );
+				if ( is_resource( $fh ) ) {
+					@fwrite( $fh, $log_html );
+					@fclose( $fh );
+				}
+			}
 
 			// PMXI aggiorna queue_chunk_number sull'oggetto via set()->update():
 			//   > 0 → time-limit raggiunto, ci sono ancora chunk da processare
@@ -331,6 +412,44 @@ class MvdWaiCtrlRunner {
 			MvdWaiCtrlLogger::closeRun( $run_id, 'success' );
 			MvdWaiCtrlState::finishRun( 'completed', __( 'Tutte le importazioni completate con successo.', 'mvd-wai-ctrl' ) );
 		}
+	}
+
+	/**
+	 * Resetta i flag runtime PMXI per un import prima di riprendere la chain.
+	 *
+	 * Azzera triggered, processing, executing nella tabella {prefix}pmxi_imports
+	 * senza toccare queue_chunk_number e gli altri counter, così PMXI può riprendere
+	 * dal chunk salvato senza essere bloccato da un cron ancora marcato come attivo.
+	 *
+	 * @param int $import_id ID dell'import PMXI su cui operare.
+	 * @return array{ok: bool, reason?: string, before?: array<string,mixed>} Stato dei flag prima del reset.
+	 */
+	public static function forceStopPmxiCron( int $import_id ): array {
+		global $wpdb;
+		$table = $wpdb->prefix . 'pmxi_imports';
+		$row   = $wpdb->get_row(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				"SELECT triggered, processing, executing, last_activity FROM {$table} WHERE id = %d",
+				$import_id
+			),
+			ARRAY_A
+		);
+		if ( null === $row ) {
+			return [ 'ok' => false, 'reason' => 'not_found' ];
+		}
+		$wpdb->update(
+			$table,
+			[
+				'triggered'  => 0,
+				'processing' => 0,
+				'executing'  => 0,
+			],
+			[ 'id' => $import_id ],
+			[ '%d', '%d', '%d' ],
+			[ '%d' ]
+		);
+		return [ 'ok' => true, 'before' => (array) $row ];
 	}
 
 	/**
