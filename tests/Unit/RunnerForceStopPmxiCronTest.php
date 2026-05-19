@@ -10,7 +10,7 @@ use Brain\Monkey\Functions;
 use Mockery;
 
 /**
- * Verifica che forceStopPmxiCron resetti i flag runtime PMXI o ritorni not_found.
+ * Verifica che forceStopPmxiCron resetti i flag runtime PMXI o ritorni ok=false se la riga non esiste.
  */
 class RunnerForceStopPmxiCronTest extends TestCase {
 
@@ -22,10 +22,9 @@ class RunnerForceStopPmxiCronTest extends TestCase {
 		$wpdb->prefix = 'wp_';
 
 		$before_row = [
-			'triggered'     => '1',
-			'processing'    => '1',
-			'executing'     => '0',
-			'last_activity' => '2026-05-18 10:00:00',
+			'triggered'  => '1',
+			'processing' => '1',
+			'executing'  => '0',
 		];
 
 		Functions\when( 'sanitize_key' )->returnArg();
@@ -79,6 +78,6 @@ class RunnerForceStopPmxiCronTest extends TestCase {
 		$result = \MvdWaiCtrlRunner::forceStopPmxiCron( 99 );
 
 		$this->assertFalse( $result['ok'] );
-		$this->assertSame( 'not_found', $result['reason'] );
+		$this->assertArrayNotHasKey( 'reason', $result );
 	}
 }

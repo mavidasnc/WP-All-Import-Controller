@@ -422,7 +422,7 @@ class MvdWaiCtrlRunner {
 	 * dal chunk salvato senza essere bloccato da un cron ancora marcato come attivo.
 	 *
 	 * @param int $import_id ID dell'import PMXI su cui operare.
-	 * @return array{ok: bool, reason?: string, before?: array<string,mixed>} Stato dei flag prima del reset.
+	 * @return array{ok: bool, before?: array<string,mixed>} Stato dei flag prima del reset.
 	 */
 	public static function forceStopPmxiCron( int $import_id ): array {
 		global $wpdb;
@@ -430,13 +430,13 @@ class MvdWaiCtrlRunner {
 		$row   = $wpdb->get_row(
 			$wpdb->prepare(
 				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-				"SELECT triggered, processing, executing, last_activity FROM {$table} WHERE id = %d",
+				"SELECT triggered, processing, executing FROM {$table} WHERE id = %d",
 				$import_id
 			),
 			ARRAY_A
 		);
 		if ( null === $row ) {
-			return [ 'ok' => false, 'reason' => 'not_found' ];
+			return [ 'ok' => false ];
 		}
 		$wpdb->update(
 			$table,

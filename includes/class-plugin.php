@@ -97,7 +97,6 @@ class MvdWaiCtrlPlugin {
 					'confirmRun'      => __( 'Avviare le 4 importazioni sequenziali? L\'operazione non può essere interrotta.', 'mvd-wai-ctrl' ),
 					'networkError'    => __( 'Impossibile contattare il server. Verificare la connessione.', 'mvd-wai-ctrl' ),
 					'resuming'        => __( 'Ripresa in corso...', 'mvd-wai-ctrl' ),
-					'crashedTitle'    => __( 'Importazione interrotta', 'mvd-wai-ctrl' ),
 				],
 			]
 		);
