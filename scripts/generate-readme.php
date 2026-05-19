@@ -40,6 +40,10 @@ if ( false === $plugin_content || false === $changelog_content ) {
 	exit( 1 );
 }
 
+// Normalizza a LF per garantire output identico su Windows (CRLF checkout) e Linux (LF checkout).
+$changelog_content = str_replace( "\r\n", "\n", $changelog_content );
+$plugin_content    = str_replace( "\r\n", "\n", $plugin_content );
+
 // ── Estrazione header dal file principale del plugin ──────────────────────────
 
 /**
