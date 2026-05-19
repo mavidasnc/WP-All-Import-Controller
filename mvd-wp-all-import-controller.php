@@ -23,7 +23,7 @@ if ( file_exists( __DIR__ . '/vendor/autoload.php' ) ) {
 
 // ── Costanti ──────────────────────────────────────────────────────────────────
 
-define( 'MVD_WAI_CTRL_VERSION',       '1.4.0' );
+define( 'MVD_WAI_CTRL_VERSION',       '1.5.1' );
 define( 'MVD_WAI_CTRL_DB_VERSION',    '1.3.0' ); // aggiornare solo quando cambia lo schema DB
 define( 'MVD_WAI_CTRL_DIR',           plugin_dir_path( __FILE__ ) );
 define( 'MVD_WAI_CTRL_URL',           plugin_dir_url( __FILE__ ) );
