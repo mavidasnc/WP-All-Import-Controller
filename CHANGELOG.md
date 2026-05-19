@@ -4,6 +4,14 @@ Tutte le modifiche rilevanti a questo progetto sono documentate in questo file.
 Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.1.0/).
 Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
+## [Unreleased]
+
+## [1.5.2] - 2026-05-19
+
+### Added
+- `readme.txt` in formato WordPress.org generato da `scripts/generate-readme.php` (`composer build:readme`). Risolve il tab "Changelog" vuoto nel modal "Visualizza dettagli" di WordPress e rimuove l'avviso "plugin non testato con la tua versione corrente" impostando `Tested up to: 6.9.4`.
+- Verifica di sincronizzazione `readme.txt` ↔ `CHANGELOG.md` nel workflow `release.yml`: la release fallisce se `readme.txt` non è stato rigenerato prima del tag.
+
 ## [1.5.1] - 2026-05-18
 
 ### Fixed

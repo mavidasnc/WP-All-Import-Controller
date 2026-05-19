@@ -26,7 +26,8 @@
         "check": [
             "@phpstan",
             "@test"
-        ]
+        ],
+        "build:readme": "php scripts/generate-readme.php"
     },
     "config": {
         "optimize-autoloader": true,
