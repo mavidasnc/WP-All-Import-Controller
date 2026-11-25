@@ -617,7 +617,7 @@ class MvdWaiCtrlRunner {
 	/**
 	 * Aggancia a pmxi_saved_post una sonda diagnostica che, al massimo ogni
 	 * PROCESSLIST_PROBE_INTERVAL secondi, scrive nel file log le altre query attive
-	 * sullo stesso utente DB. Serve a identificare chi scrive in parallelo all'import
+	 * sullo stesso utente e sullo stesso database (l'utente MySQL è condiviso con altri siti). Serve a identificare chi scrive in parallelo all'import
 	 * quando compaiono deadlock (l'utente DB non ha il privilegio PROCESS, ma vede
 	 * comunque le proprie connessioni).
 	 *
@@ -637,7 +637,7 @@ class MvdWaiCtrlRunner {
 			global $wpdb;
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- diagnostica, nessuna API WP equivalente.
 			$rows = $wpdb->get_results(
-				"SELECT ID, COMMAND, TIME, STATE, LEFT(INFO, 200) AS INFO FROM information_schema.PROCESSLIST WHERE ID <> CONNECTION_ID() AND COMMAND NOT IN ('Sleep', 'Daemon') AND INFO IS NOT NULL",
+				"SELECT ID, COMMAND, TIME, STATE, LEFT(INFO, 200) AS INFO FROM information_schema.PROCESSLIST WHERE DB = DATABASE() AND ID <> CONNECTION_ID() AND COMMAND NOT IN ('Sleep', 'Daemon') AND INFO IS NOT NULL",
 				ARRAY_A
 			);
 			if ( empty( $rows ) ) {

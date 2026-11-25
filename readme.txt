@@ -3,7 +3,7 @@ Contributors: mavidasnc
 Tags: wp-all-import, import, automation, woocommerce, cron
 Requires at least: 6.0
 Tested up to: 6.9.4
-Stable tag: 1.5.3
+Stable tag: 1.5.4
 Requires PHP: 8.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -19,6 +19,12 @@ Esegue le importazioni WP All Import Pro in sequenza con un solo click dal panne
 **Requisiti runtime:** WordPress >= 6.0, PHP >= 8.1, WP All Import Pro >= 5.0.
 
 == Changelog ==
+
+= 1.5.4 - 2026-11-25 =
+
+**Fixed:**
+* **Sonda PROCESSLIST**: filtrata sul database corrente (`DB = DATABASE()`). L'utente MySQL è condiviso con altri siti e la 1.5.3 avrebbe registrato nel log anche le loro query.
+
 
 = 1.5.3 - 2026-11-25 =
 

@@ -6,6 +6,11 @@ Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-11-25
+
+### Fixed
+- **Sonda PROCESSLIST**: filtrata sul database corrente (`DB = DATABASE()`). L'utente MySQL è condiviso con altri siti e la 1.5.3 avrebbe registrato nel log anche le loro query.
+
 ## [1.5.3] - 2026-11-25
 
 ### Fixed
