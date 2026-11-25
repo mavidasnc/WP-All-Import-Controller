@@ -224,3 +224,7 @@ details summary {
 
 /* Badge crashed */
 .mvd-outcome-crashed { background: #fce8e8; color: #8a0000; }
+
+/* Badge avviso (WP All Import non ha elaborato record) e info (azioni di servizio) */
+.mvd-outcome-warning { background: #fef8ee; color: #7a5100; }
+.mvd-outcome-info    { background: #f0f0f1; color: #3c434a; }

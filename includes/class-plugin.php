@@ -174,6 +174,11 @@ class MvdWaiCtrlPlugin {
 
 		delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
 
+		// Il client del loopback chiude la connessione dopo ~1 s (richiesta non bloccante):
+		// senza ignore_user_abort PHP può interrompere lo script al primo flush, lasciando
+		// l'import PMXI a metà con processing=1 e nessun errore nei log (come fa wp-cron.php).
+		ignore_user_abort( true );
+
 		MvdWaiCtrlRunner::runStep();
 		wp_die();
 	}

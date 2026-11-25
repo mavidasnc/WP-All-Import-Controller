@@ -3,7 +3,7 @@ Contributors: mavidasnc
 Tags: wp-all-import, import, automation, woocommerce, cron
 Requires at least: 6.0
 Tested up to: 6.9.4
-Stable tag: 1.5.2
+Stable tag: 1.5.3
 Requires PHP: 8.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -19,6 +19,21 @@ Esegue le importazioni WP All Import Pro in sequenza con un solo click dal panne
 **Requisiti runtime:** WordPress >= 6.0, PHP >= 8.1, WP All Import Pro >= 5.0.
 
 == Changelog ==
+
+= 1.5.3 - 2026-11-25 =
+
+**Fixed:**
+* **Import saltato dopo un "Riprendi" a metà passo**: il flag `resuming` veniva azzerato solo quando il resume avveniva al primo chunk di un import. Con un resume a metà passo restava `true` e si trascinava all'import successivo, che saltava l'azzeramento dei counter PMXI e si chiudeva "success" in pochi secondi senza elaborare nessun record (riscontrato su staging: import IT del run 928). Ora il flag viene azzerato dopo il primo hop di ogni resume e anche in `MvdWaiCtrlState::advanceToNextImport()`.
+* **Esito di WP All Import ignorato**: il valore restituito da `PMXI_Import_Record::execute()` non veniva controllato, quindi un import che non elaborava nulla ("No matching elements", upload del feed fallito) risultava "success" con contatori a zero. Ora uno status diverso da 200 a import concluso registra il passo come `warning` con il messaggio di WP All Import e la catena prosegue; se invece restano chunk pendenti (es. rifiuto licenza) la catena si ferma con errore, per non ciclare all'infinito.
+* **Durata dei passi sbagliata di un'ora** (o due in ora legale): `duration_sec` confrontava un orario locale del sito con `time()` UTC. Nuovo metodo `MvdWaiCtrlRunner::secondsSinceLocal()` che usa `wp_timezone()`.
+* **Blocchi interrotti senza traccia**: il loopback `mvd_wai_ctrl_run_chain` chiama ora `ignore_user_abort( true )` (come `wp-cron.php`), così la chiusura della connessione da parte del client non interrompe lo script a metà di un chunk.
+
+**Added:**
+* **Log diagnostico per hop** nel file `mvd-wai-ctrl-logs/YYYY-MM-DD.log`: righe `runStep START` / `runStep END` con PID, import, `queue_chunk_number` prima/dopo, durata e memoria di picco; riga `runStep SKIP` quando un hop trova il lock occupato; riga `WARNING` quando `scheduleSelf()` ripiega su wp-cron. Servono a verificare che due blocchi non girino mai in contemporanea.
+* **Sonda PROCESSLIST**: durante l'esecuzione di un chunk, al massimo ogni 30 secondi, vengono scritte nel file log le altre query attive dello stesso utente DB (`information_schema.PROCESSLIST`), per identificare il processo concorrente in caso di deadlock.
+* Badge `warning` e `info` nello storico dei run.
+
+
 
 = 1.5.2 - 2026-05-19 =
 

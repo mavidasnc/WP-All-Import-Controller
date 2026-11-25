@@ -138,6 +138,7 @@ class PluginTest extends TestCase {
 		Functions\when( 'admin_url' )->justReturn( 'http://localhost/wp-admin/admin-ajax.php' );
 		Functions\when( 'apply_filters' )->justReturn( false );
 		$wp_err = \Mockery::mock( 'WP_Error' );
+		$wp_err->shouldReceive( 'get_error_message' )->andReturn( 'cURL error 28' );
 		Functions\when( 'wp_remote_post' )->justReturn( $wp_err );
 		Functions\when( 'is_wp_error' )->justReturn( true );
 		Functions\when( 'delete_transient' )->justReturn( true );

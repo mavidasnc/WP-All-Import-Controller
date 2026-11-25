@@ -52,15 +52,23 @@ class RunnerTest extends TestCase {
 	}
 
 	public function test_run_step_aborts_immediately_when_lock_is_set(): void {
-		Functions\expect( 'get_transient' )
-			->once()
-			->with( MVD_WAI_CTRL_LOCK_KEY )
-			->andReturn( 1 );
-
-		Functions\expect( 'set_transient' )->never();
+		// writeFile() (traccia SKIP) usa a sua volta get/set_transient per la pulizia giornaliera:
+		// si registrano le chiavi e si verifica che il lock non venga mai ri-acquisito.
+		$set_keys = [];
+		Functions\when( 'get_transient' )->alias(
+			static fn( $key ) => MVD_WAI_CTRL_LOCK_KEY === $key ? 1 : true
+		);
+		Functions\when( 'set_transient' )->alias(
+			function ( $key ) use ( &$set_keys ): bool {
+				$set_keys[] = $key;
+				return true;
+			}
+		);
 		Functions\expect( 'get_option' )->never();
 
 		\MvdWaiCtrlRunner::runStep();
+
+		$this->assertNotContains( MVD_WAI_CTRL_LOCK_KEY, $set_keys );
 	}
 
 	public function test_run_step_acquires_lock_with_correct_ttl(): void {
@@ -463,6 +471,9 @@ class RunnerTest extends TestCase {
 		Functions\when( 'apply_filters' )->justReturn( false );
 
 		$wp_error = Mockery::mock( 'WP_Error' );
+		$wp_error->shouldReceive( 'get_error_message' )->andReturn( 'cURL error 28' );
+		// writeFile() del fallback: pulizia giornaliera log già eseguita.
+		Functions\when( 'get_transient' )->justReturn( true );
 		Functions\when( 'wp_remote_post' )->justReturn( $wp_error );
 		Functions\when( 'is_wp_error' )->justReturn( true );
 

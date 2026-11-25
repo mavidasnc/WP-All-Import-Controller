@@ -38,6 +38,9 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 		/** @var \Throwable|null */
 		private ?\Throwable $execute_throws = null;
 
+		/** Valore restituito da execute() (null = l'istanza stessa, come PMXI). */
+		private mixed $execute_return = null;
+
 		/**
 		 * Risultati che execute() deve applicare sulle proprietà dell'istanza.
 		 * Separati dalle proprietà iniziali per resistere alle chiamate set() del runner
@@ -61,6 +64,7 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 		 *   - 'queue_chunk_number'  (int)        0 = import completato; >0 = ancora chunk da processare (post-execute()).
 		 *   - 'count'               (int)        Totale record dell'import (post-execute()).
 		 *   - 'execute_throws'      (\Throwable) Se presente, execute() lancia questa eccezione.
+		 *   - 'execute_return'      (array)      Valore restituito da execute() (es. ['status' => 500, 'message' => '...']).
 		 */
 		public static function configureStub( array $configs ): void {
 			self::$stub_queue = $configs;
@@ -101,6 +105,7 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 			$this->name           = (string) ( $config['name']          ?? '' );
 			$this->friendly_name  = (string) ( $config['friendly_name'] ?? '' );
 			$this->execute_throws = $config['execute_throws']            ?? null;
+			$this->execute_return = $config['execute_return']            ?? null;
 
 			// Salva i risultati post-execute separatamente: execute() li applicherà
 			// dopo che il runner ha chiamato set() per azzerare i counter.
@@ -120,7 +125,7 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 			return $this->is_empty;
 		}
 
-		public function execute( callable $logger = null, bool $rerun = false, bool $trigger_hooks = false ): void {
+		public function execute( callable $logger = null, bool $rerun = false, $history_log_id = false ): mixed {
 			if ( null !== $this->execute_throws ) {
 				throw $this->execute_throws;
 			}
@@ -128,6 +133,7 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 			foreach ( $this->execute_results as $key => $value ) {
 				$this->$key = $value;
 			}
+			return $this->execute_return ?? $this;
 		}
 	}
 }

@@ -188,6 +188,8 @@ class MvdWaiCtrlState {
 		$state['current_total_records']       = 0;
 		$state['current_step_started_at']     = '';
 		$state['current_step_history_log_id'] = 0;
+		// Il resume riguarda solo l'import in cui è avvenuto: il successivo deve azzerare i counter PMXI.
+		$state['resuming']                    = false;
 		self::save( $state );
 
 		return true;
@@ -250,6 +252,20 @@ class MvdWaiCtrlState {
 	 */
 	public static function getStepHistoryLogId(): int {
 		return (int) ( self::get()['current_step_history_log_id'] ?? 0 );
+	}
+
+	/**
+	 * Azzera il flag resuming dopo il primo hop di una ripresa.
+	 *
+	 * @return void
+	 */
+	public static function clearResuming(): void {
+		$state = self::get();
+		if ( empty( $state['resuming'] ) ) {
+			return;
+		}
+		$state['resuming'] = false;
+		self::save( $state );
 	}
 
 	/**

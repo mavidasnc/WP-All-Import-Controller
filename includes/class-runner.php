@@ -32,6 +32,13 @@ class MvdWaiCtrlRunner {
 	private const LOCK_TTL = 120;
 
 	/**
+	 * Intervallo minimo (secondi) tra due campionamenti della sonda PROCESSLIST.
+	 *
+	 * @var int
+	 */
+	private const PROCESSLIST_PROBE_INTERVAL = 30;
+
+	/**
 	 * Restituisce il nome leggibile di un'importazione WP All Import Pro.
 	 *
 	 * Usa friendly_name (nome dato dall'utente nell'UI) come primario,
@@ -65,6 +72,8 @@ class MvdWaiCtrlRunner {
 	 */
 	public static function runStep(): void {
 		if ( get_transient( MVD_WAI_CTRL_LOCK_KEY ) ) {
+			// Traccia diagnostica: un secondo hop è arrivato mentre il lock era occupato.
+			MvdWaiCtrlLogger::writeFile( 'INFO', 'runStep SKIP: lock occupato', [ 'pid' => getmypid() ] );
 			return;
 		}
 		set_transient( MVD_WAI_CTRL_LOCK_KEY, 1, self::LOCK_TTL );
@@ -250,7 +259,7 @@ class MvdWaiCtrlRunner {
 					$step_label,
 					__( 'Avvio importazione...', 'mvd-wai-ctrl' )
 				);
-			} elseif ( $is_first_chunk && $is_resuming ) {
+			} elseif ( $is_first_chunk ) { // Qui $is_resuming è necessariamente true.
 				// Resume: azzera il flag dopo la prima esecuzione, ma mantieni i counter PMXI.
 				// Aggiorna comunque lo step_label e riprendi il timestamp precedente.
 				// Se il crash è avvenuto prima della creazione dell'history record (history_log_id = 0),
@@ -274,11 +283,31 @@ class MvdWaiCtrlRunner {
 					$step_label,
 					__( 'Ripresa importazione...', 'mvd-wai-ctrl' )
 				);
-				// Ricarica lo state aggiornato e imposta resuming=false per i chunk successivi.
-				$state_after             = MvdWaiCtrlState::get();
-				$state_after['resuming'] = false;
-				MvdWaiCtrlState::save( $state_after );
+				MvdWaiCtrlState::clearResuming();
+			} elseif ( $is_resuming ) {
+				// Resume a metà passo (chunk già contati): il reset dei counter non si applica comunque,
+				// ma il flag va azzerato subito, altrimenti si trascina all'import successivo e
+				// quell'import salterebbe il reset dei counter PMXI chiudendosi senza elaborare nulla.
+				MvdWaiCtrlState::clearResuming();
 			}
+
+			// Traccia diagnostica di inizio hop: PID e posizione PMXI permettono di verificare
+			// che due hop non lavorino mai in contemporanea.
+			$q_chunk_before = (int) $import->queue_chunk_number;
+			MvdWaiCtrlLogger::writeFile(
+				'INFO',
+				'runStep START',
+				[
+					'pid'         => getmypid(),
+					'run_id'      => $run_id,
+					'import_id'   => $import_id,
+					'q_chunk'     => $q_chunk_before,
+					'processing'  => (int) ( $import->processing ?? 0 ),
+					'first_chunk' => $is_first_chunk,
+					'resuming'    => $is_resuming,
+				]
+			);
+			self::attachProcesslistProbe( $run_id, $import_id );
 
 			// Prepara il path del file HTML di log nativo WPAI per questo step.
 			// Tutti i chunk dello stesso import appendono allo stesso file (fopen 'a+').
@@ -295,12 +324,14 @@ class MvdWaiCtrlRunner {
 			// Esegue l'import bufferizzando l'output per il file HTML di log WPAI
 			// (pattern src/Scheduling/Import.php:71-88). Il finally garantisce che
 			// ob_get_clean() venga chiamato anche se execute() lancia un'eccezione.
-			$log_html = '';
+			$log_html    = '';
+			$exec_result = null;
 			ob_start();
 			try {
-				$import->execute( $logger, true, $history_log_id > 0 ? $history_log_id : false );
+				$exec_result = $import->execute( $logger, true, $history_log_id > 0 ? $history_log_id : false );
 			} finally {
 				$log_html = (string) ob_get_clean();
+				self::detachProcesslistProbe();
 			}
 
 			if ( '' !== $log_file_path && '' !== $log_html ) {
@@ -316,6 +347,34 @@ class MvdWaiCtrlRunner {
 			//   = 0 → import completato (o feed vuoto, che consideriamo completato)
 			$q_chunk = (int) $import->queue_chunk_number;
 			$count   = (int) $import->count;
+
+			// execute() restituisce un array status/message quando PMXI si ferma senza elaborare
+			// (feed vuoto, "No matching elements", upload fallito, rifiuto licenza).
+			$exec_warning = self::extractExecuteWarning( $exec_result );
+
+			MvdWaiCtrlLogger::writeFile(
+				null === $exec_warning ? 'INFO' : 'WARNING',
+				'runStep END',
+				array_filter(
+					[
+						'pid'          => getmypid(),
+						'run_id'       => $run_id,
+						'import_id'    => $import_id,
+						'q_chunk'      => $q_chunk_before . '->' . $q_chunk,
+						'count'        => $count,
+						'duration_sec' => time() - $step_start,
+						'peak_mb'      => round( memory_get_peak_usage( true ) / 1048576, 1 ),
+						'wpai_status'  => $exec_warning,
+					],
+					static fn( $v ): bool => null !== $v
+				)
+			);
+
+			if ( null !== $exec_warning && $q_chunk > 0 ) {
+				// PMXI ha rifiutato l'esecuzione lasciando chunk pendenti: ri-schedulare
+				// produrrebbe un ciclo infinito di hop a vuoto, quindi la catena si ferma.
+				throw new \RuntimeException( $exec_warning );
+			}
 
 			if ( $q_chunk > 0 ) {
 				// Import non finito: aggiorna progresso e ri-schedula lo stesso step.
@@ -334,22 +393,32 @@ class MvdWaiCtrlRunner {
 				$schedule_next = true;
 			} else {
 				// Import completato: registra lo step e avanza.
+				// Se PMXI ha restituito uno status diverso da 200 lo step è un avviso,
+				// ma la catena prosegue con l'import successivo.
 				$duration_sec = $step_started_at
-					? max( 0, time() - (int) strtotime( $step_started_at ) )
+					? self::secondsSinceLocal( $step_started_at )
 					: time() - $step_start;
+				$step_message = implode( "\n", array_slice( $log_messages, -50 ) );
+				if ( null !== $exec_warning ) {
+					$step_message = sprintf(
+						/* translators: %s: messaggio restituito da WP All Import */
+						__( 'WP All Import non ha elaborato record: %s', 'mvd-wai-ctrl' ),
+						$exec_warning
+					) . ( '' !== $step_message ? "\n" . $step_message : '' );
+				}
 				MvdWaiCtrlLogger::appendStep(
 					$run_id,
 					[
 						'step_index'   => $current_idx,
 						'import_id'    => $import_id,
 						'import_name'  => $import_name,
-						'outcome'      => 'success',
+						'outcome'      => null === $exec_warning ? 'success' : 'warning',
 						'created'      => (int) $import->created,
 						'updated'      => (int) $import->updated,
 						'skipped'      => (int) $import->skipped,
 						'duration_sec' => $duration_sec,
 						'started_at'   => $step_started_at ?: current_time( 'mysql' ),
-						'message'      => implode( "\n", array_slice( $log_messages, -50 ) ),
+						'message'      => $step_message,
 					]
 				);
 
@@ -372,8 +441,9 @@ class MvdWaiCtrlRunner {
 				}
 			}
 		} catch ( \Throwable $e ) {
+			self::detachProcesslistProbe();
 			$err_duration = $step_started_at
-				? max( 0, time() - (int) strtotime( $step_started_at ) )
+				? self::secondsSinceLocal( $step_started_at )
 				: time() - $step_start;
 			$err_message  = $e->getMessage() . "\n" . implode( "\n", array_slice( $log_messages, -50 ) );
 			MvdWaiCtrlLogger::appendStep(
@@ -479,9 +549,125 @@ class MvdWaiCtrlRunner {
 		);
 
 		if ( is_wp_error( $result ) ) {
+			MvdWaiCtrlLogger::writeFile(
+				'WARNING',
+				'scheduleSelf: loopback fallito, fallback su wp-cron',
+				[
+					'pid'   => getmypid(),
+					'error' => $result->get_error_message(),
+				]
+			);
 			delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
 			wp_schedule_single_event( time() - 1, MVD_WAI_CTRL_CRON_HOOK );
 			spawn_cron();
 		}
+	}
+
+	/**
+	 * Estrae il messaggio di avviso dal valore restituito da PMXI_Import_Record::execute().
+	 *
+	 * PMXI restituisce l'istanza stessa quando elabora normalmente, oppure un array
+	 * ['status' => int, 'message' => string|array] quando si ferma (feed vuoto,
+	 * nessun elemento per l'XPath, upload fallito, rifiuto licenza).
+	 *
+	 * @param mixed $exec_result Valore restituito da execute().
+	 * @return string|null       Messaggio "status N: testo" se lo status non è 200, altrimenti null.
+	 */
+	public static function extractExecuteWarning( $exec_result ): ?string {
+		if ( ! is_array( $exec_result ) || ! isset( $exec_result['status'] ) ) {
+			return null;
+		}
+		$status = (int) $exec_result['status'];
+		if ( 200 === $status ) {
+			return null;
+		}
+		$message = $exec_result['message'] ?? '';
+		if ( is_array( $message ) ) {
+			$message = implode( ' | ', array_map( 'strval', $message ) );
+		}
+		return sprintf( 'status %d: %s', $status, wp_strip_all_tags( (string) $message ) );
+	}
+
+	/**
+	 * Calcola i secondi trascorsi da un datetime MySQL espresso nel fuso orario del sito.
+	 *
+	 * I timestamp di step sono salvati con current_time('mysql') (ora locale del sito):
+	 * confrontarli con time() via strtotime() introduceva uno scarto pari all'offset UTC.
+	 *
+	 * @param string $local_mysql Datetime 'Y-m-d H:i:s' nel fuso del sito.
+	 * @return int                Secondi trascorsi (mai negativi).
+	 */
+	public static function secondsSinceLocal( string $local_mysql ): int {
+		try {
+			$tz    = function_exists( 'wp_timezone' ) ? wp_timezone() : new \DateTimeZone( 'UTC' );
+			$start = new \DateTimeImmutable( $local_mysql, $tz );
+		} catch ( \Exception $e ) {
+			return 0;
+		}
+		return max( 0, time() - $start->getTimestamp() );
+	}
+
+	/**
+	 * Callback attiva della sonda PROCESSLIST (null se non agganciata).
+	 *
+	 * @var \Closure|null
+	 */
+	private static ?\Closure $processlist_probe = null;
+
+	/**
+	 * Aggancia a pmxi_saved_post una sonda diagnostica che, al massimo ogni
+	 * PROCESSLIST_PROBE_INTERVAL secondi, scrive nel file log le altre query attive
+	 * sullo stesso utente DB. Serve a identificare chi scrive in parallelo all'import
+	 * quando compaiono deadlock (l'utente DB non ha il privilegio PROCESS, ma vede
+	 * comunque le proprie connessioni).
+	 *
+	 * @param int $run_id    ID del run corrente.
+	 * @param int $import_id ID dell'import in esecuzione.
+	 * @return void
+	 */
+	private static function attachProcesslistProbe( int $run_id, int $import_id ): void {
+		$last_probe = time();
+
+		self::$processlist_probe = static function () use ( $run_id, $import_id, &$last_probe ): void {
+			if ( ( time() - $last_probe ) < self::PROCESSLIST_PROBE_INTERVAL ) {
+				return;
+			}
+			$last_probe = time();
+
+			global $wpdb;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- diagnostica, nessuna API WP equivalente.
+			$rows = $wpdb->get_results(
+				"SELECT ID, COMMAND, TIME, STATE, LEFT(INFO, 200) AS INFO FROM information_schema.PROCESSLIST WHERE ID <> CONNECTION_ID() AND COMMAND NOT IN ('Sleep', 'Daemon') AND INFO IS NOT NULL",
+				ARRAY_A
+			);
+			if ( empty( $rows ) ) {
+				return;
+			}
+			MvdWaiCtrlLogger::writeFile(
+				'INFO',
+				'PROCESSLIST query concorrenti',
+				[
+					'pid'       => getmypid(),
+					'run_id'    => $run_id,
+					'import_id' => $import_id,
+					'rows'      => $rows,
+				]
+			);
+		};
+
+		add_action( 'pmxi_saved_post', self::$processlist_probe, 99, 0 );
+	}
+
+	/**
+	 * Sgancia la sonda PROCESSLIST da pmxi_saved_post, se presente.
+	 *
+	 * @return void
+	 */
+	private static function detachProcesslistProbe(): void {
+		if ( null === self::$processlist_probe ) {
+			return;
+		}
+		remove_action( 'pmxi_saved_post', self::$processlist_probe, 99 );
+		self::$processlist_probe = null;
 	}
 }
