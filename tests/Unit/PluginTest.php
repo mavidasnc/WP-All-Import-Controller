@@ -93,17 +93,15 @@ class PluginTest extends TestCase {
 		\MvdWaiCtrlPlugin::ajaxStart();
 	}
 
-	public function test_ajax_start_rejects_when_lock_transient_is_set(): void {
+	public function test_ajax_start_rejects_when_exec_lock_is_busy(): void {
 		Functions\when( 'check_ajax_referer' )->justReturn( true );
 		Functions\when( 'current_user_can' )->justReturn( true );
 		// class_exists('PMXI_Import_Record') ritorna true per default (stub definito nel bootstrap).
 		// Stato: idle (isRunning = false).
 		Functions\when( 'get_option' )->justReturn( [ 'status' => 'idle' ] );
-		// Lock attivo.
-		Functions\expect( 'get_transient' )
-			->once()
-			->with( MVD_WAI_CTRL_LOCK_KEY )
-			->andReturn( 1 );
+		// Un blocco di un run precedente detiene ancora il lock MySQL di esecuzione.
+		global $wpdb;
+		$wpdb->sim_is_free_lock = '0';
 
 		Functions\when( 'wp_send_json_error' )->alias(
 			function ( $data, $status ): void {
@@ -220,7 +218,7 @@ class PluginTest extends TestCase {
 		$wpdb->shouldReceive( 'insert' )->once()->andReturn( 1 );
 		$wpdb->insert_id = 1;
 		$wpdb->shouldReceive( 'update' )->once()->andReturn( 1 );
-		$wpdb->shouldReceive( 'prepare' )->andReturn( 'SQL' );
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( static fn( $q ) => $q );
 		$wpdb->shouldReceive( 'get_results' )->andReturn( [] );
 
 		$success_called = false;
@@ -255,7 +253,7 @@ class PluginTest extends TestCase {
 		Functions\when( 'get_transient' )->justReturn( false );
 
 		global $wpdb;
-		$wpdb->shouldReceive( 'prepare' )->andReturn( 'SQL' );
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( static fn( $q ) => $q );
 		$wpdb->shouldReceive( 'get_results' )->andReturn( [] );
 
 		$success_data = null;
@@ -282,7 +280,7 @@ class PluginTest extends TestCase {
 		Functions\when( 'get_option' )->justReturn( [ 'status' => 'idle', 'run_id' => 0 ] );
 
 		global $wpdb;
-		$wpdb->shouldReceive( 'prepare' )->andReturn( 'SQL' );
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( static fn( $q ) => $q );
 		$wpdb->shouldReceive( 'get_results' )->andReturn( [] );
 
 		$success_data = null;

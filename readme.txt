@@ -3,7 +3,7 @@ Contributors: mavidasnc
 Tags: wp-all-import, import, automation, woocommerce, cron
 Requires at least: 6.0
 Tested up to: 6.9.4
-Stable tag: 1.5.4
+Stable tag: 1.6.0
 Requires PHP: 8.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -19,6 +19,25 @@ Esegue le importazioni WP All Import Pro in sequenza con un solo click dal panne
 **Requisiti runtime:** WordPress >= 6.0, PHP >= 8.1, WP All Import Pro >= 5.0.
 
 == Changelog ==
+
+= 1.6.0 - 2026-11-25 =
+
+**Changed:**
+* **Esclusione reciproca con lock MySQL `GET_LOCK()`** al posto del transient con TTL di 120 s. Un solo blocco alla volta può eseguire `runStep()`; il lock appartiene alla connessione MySQL del processo, quindi viene rilasciato automaticamente se il processo PHP muore. Il transient poteva scadere durante blocchi lunghi (≈ 110 s con 4 record a ~28 s l'uno), non era atomico e veniva cancellato anche da chi non lo possedeva. Nome del lock: hash di `DB_NAME` + prefisso tabelle, per non collidere con altri siti sullo stesso server MySQL. Se `GET_LOCK` dà errore il run si chiude in errore invece di proseguire senza protezione.
+* **Watchdog**: dichiara la catena interrotta solo se il lock di esecuzione è libero (nessun processo vivo) **e** non c'è attività da più di `MVD_WAI_CTRL_WATCHDOG_THRESHOLD` secondi. Un blocco lungo ma vivo non viene più segnato "crashed". Se il blocco è vivo ma non salva record da più di `MVD_WAI_CTRL_SLOW_THRESHOLD` (600 s) la UI lo segnala come lento, senza proporre azioni.
+* **"Riprendi" sicuro**: rifiutato (409) finché il blocco interrotto detiene il lock; `forceStopPmxiCron()` viene eseguito solo a lock libero. Rimossa l'attesa fissa di 3 secondi.
+* **Start, Riprendi e Reset serializzati** con un secondo lock MySQL di controllo: doppi click o più schede aperte non eseguono l'azione due volte. Start rifiutato se un blocco di un run precedente è ancora in esecuzione.
+* `scheduleSelf()` usa un timeout esplicito di 1 s (Requests lo imponeva comunque come minimo con cURL).
+
+**Added:**
+* **`chain_id`** nello stato, rigenerato a ogni avvio e ripresa, passato nel loopback e nell'evento cron di fallback. Gli hop di una catena superata vengono scartati; un blocco che a fine esecuzione non possiede più lock o catena (riconnessione MySQL, Reset nel frattempo) non scrive lo stato e non ri-schedula. Gli stati creati da versioni precedenti (senza `chain_id`) accettano qualsiasi hop, così l'aggiornamento non interrompe un run.
+* **Heartbeat durante il chunk**: option `mvd_wai_ctrl_heartbeat` aggiornata su `pmxi_saved_post` al massimo ogni 20 secondi; il watchdog usa la più recente tra questa e `updated_at`.
+* Nuova costante `MVD_WAI_CTRL_SLOW_THRESHOLD` (600 s); `ajaxStatus()` restituisce anche `exec_alive` e `stalled_sec`.
+
+**Fixed:**
+* Il pulsante "Riprendi" poteva essere ripremuto mentre la richiesta di ripresa era ancora in corso.
+* Con un blocco ancora vivo dopo un errore, il polling si fermava e "Riprendi" non compariva più quando il blocco terminava: ora il polling continua finché il blocco è in esecuzione.
+
 
 = 1.5.4 - 2026-11-25 =
 

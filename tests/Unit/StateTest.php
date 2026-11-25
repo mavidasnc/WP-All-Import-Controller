@@ -89,6 +89,7 @@ class StateTest extends TestCase {
 
 	public function test_start_run_saves_running_status_with_correct_fields(): void {
 		Functions\when( 'current_time' )->justReturn( '2024-01-01 10:00:00' );
+		Functions\when( 'wp_generate_password' )->justReturn( 'new-chain-id' );
 		Functions\expect( 'update_option' )
 			->once()
 			->with(
@@ -99,7 +100,8 @@ class StateTest extends TestCase {
 							&& 42 === $v['run_id']
 							&& 0 === $v['step_current']
 							&& count( MVD_WAI_CTRL_IDS ) === $v['step_total']
-							&& null === $v['finished_at'];
+							&& null === $v['finished_at']
+							&& 'new-chain-id' === $v['chain_id'];
 					}
 				),
 				false

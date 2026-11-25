@@ -25,6 +25,7 @@ defined( 'DAY_IN_SECONDS' )    || define( 'DAY_IN_SECONDS',    86400 );
 
 // Nuove costanti del plugin per error handling e log.
 define( 'MVD_WAI_CTRL_WATCHDOG_THRESHOLD', 180 );
+define( 'MVD_WAI_CTRL_SLOW_THRESHOLD',     600 );
 define( 'MVD_WAI_CTRL_LOG_DIR',            'mvd-wai-ctrl-logs' );
 define( 'MVD_WAI_CTRL_LOG_RETENTION_DAYS', 30 );
 

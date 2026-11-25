@@ -39,10 +39,15 @@ class RunnerResumeAndStatusTest extends TestCase {
 			$state
 		);
 
-		Functions\when( 'get_option' )->alias( fn() => $this->saved_state );
+		// Solo l'option di stato è simulata; le altre (es. heartbeat) restituiscono il default.
+		Functions\when( 'get_option' )->alias(
+			fn( $name, $default = false ) => MVD_WAI_CTRL_STATE_OPTION === $name ? $this->saved_state : $default
+		);
 		Functions\when( 'update_option' )->alias(
 			function ( $name, $value ): bool {
-				$this->saved_state = $value;
+				if ( MVD_WAI_CTRL_STATE_OPTION === $name ) {
+					$this->saved_state = $value;
+				}
 				return true;
 			}
 		);
@@ -117,7 +122,7 @@ class RunnerResumeAndStatusTest extends TestCase {
 		\MvdWaiCtrlRunner::runStep();
 
 		$this->assertCount( 1, $inserted );
-		$this->assertSame( 'warning', $inserted[0]['outcome'] );
+		$this->assertSame( 'warning', $inserted[0]['outcome'], (string) $inserted[0]['message'] );
 		$this->assertStringContainsString( 'status 500', $inserted[0]['message'] );
 		$this->assertSame( 3, $this->saved_state['current_index'], 'La catena deve proseguire con l\'import successivo.' );
 		$this->assertSame( 'running', $this->saved_state['status'] );
@@ -161,6 +166,29 @@ class RunnerResumeAndStatusTest extends TestCase {
 		$this->assertSame( [ 'error' ], $outcomes );
 		$this->assertSame( 'error', $close_outcome );
 		$this->assertSame( 'error', $this->saved_state['status'] );
+	}
+
+	public function test_orphan_hop_does_not_write_state_nor_reschedule(): void {
+		// Chunk terminato, ma nel frattempo la connessione ha perso il lock (es. riconnessione wpdb).
+		\PMXI_Import_Record::configureStub(
+			[
+				[ 'empty' => false, 'queue_chunk_number' => 80, 'count' => 276 ],
+			]
+		);
+		$this->bootState(
+			[
+				'current_step_total_chunks' => 276,
+				'current_chunk_done'        => 40,
+			]
+		);
+		$wpdb                = $this->createWpdbMock();
+		$wpdb->sim_owns_lock = '0';
+		Functions\expect( 'wp_remote_post' )->never();
+
+		\MvdWaiCtrlRunner::runStep();
+
+		$this->assertSame( 40, $this->saved_state['current_chunk_done'], 'Lo stato non deve essere aggiornato da un hop orfano.' );
+		$this->assertSame( 'running', $this->saved_state['status'] );
 	}
 
 	public function test_extract_execute_warning(): void {

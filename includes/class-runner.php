@@ -23,13 +23,18 @@ defined( 'ABSPATH' ) || exit;
 class MvdWaiCtrlRunner {
 
 	/**
-	 * TTL del lock anti-doppio-avvio (secondi).
-	 *
-	 * Copre un singolo step (un chunk PMXI ≈ 59 s) con margine di sicurezza.
+	 * Intervallo minimo (secondi) tra due scritture dell'heartbeat durante un chunk.
 	 *
 	 * @var int
 	 */
-	private const LOCK_TTL = 120;
+	private const HEARTBEAT_INTERVAL = 20;
+
+	/**
+	 * Codice dell'eccezione interna usata quando l'hop non è più proprietario della catena.
+	 *
+	 * @var int
+	 */
+	private const ORPHAN_CODE = 409;
 
 	/**
 	 * Intervallo minimo (secondi) tra due campionamenti della sonda PROCESSLIST.
@@ -68,21 +73,33 @@ class MvdWaiCtrlRunner {
 	/**
 	 * Processa un singolo step della catena. Punto di ingresso del loopback e del cron fallback.
 	 *
+	 * L'esclusione reciproca è garantita dal lock MySQL GET_LOCK(): un solo hop alla volta
+	 * può eseguire, e se il processo PHP muore MySQL rilascia il lock alla chiusura della connessione.
+	 *
+	 * @param string $chain_id Identificativo della catena che ha generato l'hop ('' = hop legacy).
 	 * @return void
 	 */
-	public static function runStep(): void {
-		if ( get_transient( MVD_WAI_CTRL_LOCK_KEY ) ) {
-			// Traccia diagnostica: un secondo hop è arrivato mentre il lock era occupato.
+	public static function runStep( string $chain_id = '' ): void {
+		$lock = self::acquireExecLock();
+		if ( null === $lock ) {
+			// GET_LOCK non disponibile (errore MySQL): senza esclusione reciproca non si procede.
+			MvdWaiCtrlLogger::writeFile( 'ERROR', 'runStep: GET_LOCK non disponibile', [ 'pid' => getmypid() ] );
+			if ( MvdWaiCtrlState::isRunning() ) {
+				MvdWaiCtrlState::finishRun( 'error', __( 'Impossibile acquisire il lock MySQL di esecuzione (GET_LOCK).', 'mvd-wai-ctrl' ) );
+			}
+			return;
+		}
+		if ( false === $lock ) {
+			// Traccia diagnostica: un secondo hop è arrivato mentre un altro blocco era in esecuzione.
 			MvdWaiCtrlLogger::writeFile( 'INFO', 'runStep SKIP: lock occupato', [ 'pid' => getmypid() ] );
 			return;
 		}
-		set_transient( MVD_WAI_CTRL_LOCK_KEY, 1, self::LOCK_TTL );
 
 		// Shutdown handler: intercetta fatal error / OOM prima che il processo muoia.
 		// Viene registrato subito dopo l'acquisizione del lock per catturare qualsiasi
 		// crash che avvenga da questo punto in poi, inclusi quelli dentro execute().
 		register_shutdown_function(
-			static function (): void {
+			static function () use ( $chain_id ): void {
 				$err = error_get_last();
 				$fatal_types = E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR;
 				if ( null === $err || ! ( $err['type'] & $fatal_types ) ) {
@@ -90,8 +107,9 @@ class MvdWaiCtrlRunner {
 				}
 				$state = MvdWaiCtrlState::get();
 				// Interviene solo se il run è ancora marcato 'running' (evita doppia scrittura
-				// nel caso in cui il try/catch abbia già chiuso il run prima del fatal).
-				if ( 'running' !== $state['status'] ) {
+				// nel caso in cui il try/catch abbia già chiuso il run prima del fatal)
+				// e se questo hop appartiene ancora alla catena valida.
+				if ( 'running' !== $state['status'] || ! MvdWaiCtrlState::isCurrentChain( $chain_id ) ) {
 					return;
 				}
 				$run_id  = (int) $state['run_id'];
@@ -106,7 +124,7 @@ class MvdWaiCtrlRunner {
 				MvdWaiCtrlLogger::markRunCrashed( $run_id, $message );
 				MvdWaiCtrlLogger::writeFile( 'FATAL', $message, [ 'run_id' => $run_id ] );
 				MvdWaiCtrlState::markCrashed( $message );
-				delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+				self::releaseExecLock();
 			}
 		);
 
@@ -119,13 +137,20 @@ class MvdWaiCtrlRunner {
 		add_filter( 'pmxi_is_admin_dashboard_or_cron_import', '__return_true' );
 
 		if ( ! MvdWaiCtrlState::isRunning() ) {
-			delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+			self::releaseExecLock();
+			return;
+		}
+
+		if ( ! MvdWaiCtrlState::isCurrentChain( $chain_id ) ) {
+			// Hop di una catena superata da un nuovo start/resume: si spegne senza ri-schedulare.
+			MvdWaiCtrlLogger::writeFile( 'WARNING', 'runStep SCARTATO: chain_id non corrente', [ 'pid' => getmypid() ] );
+			self::releaseExecLock();
 			return;
 		}
 
 		if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 			MvdWaiCtrlState::finishRun( 'error', __( 'WP All Import Pro non è attivo o la classe PMXI_Import_Record non è disponibile.', 'mvd-wai-ctrl' ) );
-			delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+			self::releaseExecLock();
 			return;
 		}
 
@@ -140,7 +165,7 @@ class MvdWaiCtrlRunner {
 		if ( null === $import_id ) {
 			MvdWaiCtrlLogger::closeRun( $run_id, 'success' );
 			MvdWaiCtrlState::finishRun( 'completed', __( 'Tutte le importazioni completate.', 'mvd-wai-ctrl' ) );
-			delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+			self::releaseExecLock();
 			return;
 		}
 
@@ -305,9 +330,11 @@ class MvdWaiCtrlRunner {
 					'processing'  => (int) ( $import->processing ?? 0 ),
 					'first_chunk' => $is_first_chunk,
 					'resuming'    => $is_resuming,
+					'chain_id'    => $chain_id,
 				]
 			);
-			self::attachProcesslistProbe( $run_id, $import_id );
+			MvdWaiCtrlState::touchHeartbeat();
+			self::attachChunkTicker( $run_id, $import_id );
 
 			// Prepara il path del file HTML di log nativo WPAI per questo step.
 			// Tutti i chunk dello stesso import appendono allo stesso file (fopen 'a+').
@@ -331,7 +358,7 @@ class MvdWaiCtrlRunner {
 				$exec_result = $import->execute( $logger, true, $history_log_id > 0 ? $history_log_id : false );
 			} finally {
 				$log_html = (string) ob_get_clean();
-				self::detachProcesslistProbe();
+				self::detachChunkTicker();
 			}
 
 			if ( '' !== $log_file_path && '' !== $log_html ) {
@@ -369,6 +396,12 @@ class MvdWaiCtrlRunner {
 					static fn( $v ): bool => null !== $v
 				)
 			);
+
+			// Prima di scrivere lo stato verifica di essere ancora il proprietario: il lock può
+			// andare perso se wpdb si riconnette, e un Reset può aver chiuso la catena nel frattempo.
+			if ( ! self::ownsExecLock() || ! MvdWaiCtrlState::isCurrentChain( $chain_id ) ) {
+				throw new \RuntimeException( 'runStep ORFANO: lock o catena non più validi', self::ORPHAN_CODE );
+			}
 
 			if ( null !== $exec_warning && $q_chunk > 0 ) {
 				// PMXI ha rifiutato l'esecuzione lasciando chunk pendenti: ri-schedulare
@@ -441,7 +474,14 @@ class MvdWaiCtrlRunner {
 				}
 			}
 		} catch ( \Throwable $e ) {
-			self::detachProcesslistProbe();
+			self::detachChunkTicker();
+			if ( $e instanceof \RuntimeException && self::ORPHAN_CODE === $e->getCode() ) {
+				// Hop orfano: il lavoro PMXI resta salvato nel record dell'import, ma lo stato
+				// del controller appartiene a un'altra catena e non va toccato.
+				MvdWaiCtrlLogger::writeFile( 'ERROR', $e->getMessage(), [ 'pid' => getmypid(), 'import_id' => $import_id ] );
+				self::releaseExecLock();
+				return;
+			}
 			$err_duration = $step_started_at
 				? self::secondsSinceLocal( $step_started_at )
 				: time() - $step_start;
@@ -472,12 +512,13 @@ class MvdWaiCtrlRunner {
 			MvdWaiCtrlState::finishRun( 'error', $e->getMessage() );
 		}
 
-		// Lock rilasciato sempre, dopo il try/catch, una sola volta.
-		delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+		// Lock rilasciato sempre, dopo il try/catch, una sola volta, e prima di schedulare
+		// il prossimo hop (che altrimenti lo troverebbe occupato e si spegnerebbe).
+		self::releaseExecLock();
 
 		// Azioni post-step fuori dal try/catch: errori qui non corrompono lo stato dell'import.
 		if ( $schedule_next ) {
-			self::scheduleSelf();
+			self::scheduleSelf( $chain_id );
 		} elseif ( $chain_done ) {
 			MvdWaiCtrlLogger::closeRun( $run_id, 'success' );
 			MvdWaiCtrlState::finishRun( 'completed', __( 'Tutte le importazioni completate con successo.', 'mvd-wai-ctrl' ) );
@@ -528,23 +569,32 @@ class MvdWaiCtrlRunner {
 	 *
 	 * Genera un token monouso per autenticare il loopback e lo persiste come
 	 * transient (TTL 60 s). Il token viene verificato e cancellato da ajaxRunChain().
+	 * Il chain_id viaggia insieme al token: runStep() scarta gli hop di catene superate.
 	 *
+	 * @param string $chain_id Catena a cui appartiene il prossimo hop ('' = catena corrente dello stato).
 	 * @return void
 	 */
-	public static function scheduleSelf(): void {
+	public static function scheduleSelf( string $chain_id = '' ): void {
+		if ( '' === $chain_id ) {
+			$chain_id = MvdWaiCtrlState::getChainId();
+		}
+
 		$secret = wp_generate_password( 32, false );
 		set_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret', $secret, MINUTE_IN_SECONDS );
 
+		// Timeout esplicito di 1 s: Requests impone comunque un minimo di 1 s con cURL,
+		// e con blocking=false la risposta non viene letta.
 		$result = wp_remote_post(
 			admin_url( 'admin-ajax.php' ),
 			[
 				'body'      => [
-					'action' => 'mvd_wai_ctrl_run_chain',
-					'secret' => $secret,
+					'action'   => 'mvd_wai_ctrl_run_chain',
+					'secret'   => $secret,
+					'chain_id' => $chain_id,
 				],
 				'blocking'  => false,
 				'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
-				'timeout'   => 0.01,
+				'timeout'   => 1,
 			]
 		);
 
@@ -558,7 +608,7 @@ class MvdWaiCtrlRunner {
 				]
 			);
 			delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
-			wp_schedule_single_event( time() - 1, MVD_WAI_CTRL_CRON_HOOK );
+			wp_schedule_single_event( time() - 1, MVD_WAI_CTRL_CRON_HOOK, [ $chain_id ] );
 			spawn_cron();
 		}
 	}
@@ -608,31 +658,38 @@ class MvdWaiCtrlRunner {
 	}
 
 	/**
-	 * Callback attiva della sonda PROCESSLIST (null se non agganciata).
+	 * Callback attiva del ticker di chunk (null se non agganciata).
 	 *
 	 * @var \Closure|null
 	 */
-	private static ?\Closure $processlist_probe = null;
+	private static ?\Closure $chunk_ticker = null;
 
 	/**
-	 * Aggancia a pmxi_saved_post una sonda diagnostica che, al massimo ogni
-	 * PROCESSLIST_PROBE_INTERVAL secondi, scrive nel file log le altre query attive
-	 * sullo stesso utente e sullo stesso database (l'utente MySQL è condiviso con altri siti). Serve a identificare chi scrive in parallelo all'import
-	 * quando compaiono deadlock (l'utente DB non ha il privilegio PROCESS, ma vede
-	 * comunque le proprie connessioni).
+	 * Aggancia a pmxi_saved_post un ticker che, durante l'esecuzione di un chunk:
+	 *  - aggiorna l'heartbeat al massimo ogni HEARTBEAT_INTERVAL secondi, così UI e watchdog
+	 *    sanno che il blocco sta avanzando anche quando dura minuti;
+	 *  - al massimo ogni PROCESSLIST_PROBE_INTERVAL secondi scrive nel file log le altre query
+	 *    attive sullo stesso database (l'utente MySQL è condiviso con altri siti), per
+	 *    identificare chi scrive in parallelo all'import quando compaiono deadlock.
 	 *
 	 * @param int $run_id    ID del run corrente.
 	 * @param int $import_id ID dell'import in esecuzione.
 	 * @return void
 	 */
-	private static function attachProcesslistProbe( int $run_id, int $import_id ): void {
-		$last_probe = time();
+	private static function attachChunkTicker( int $run_id, int $import_id ): void {
+		$last_heartbeat = time();
+		$last_probe     = time();
 
-		self::$processlist_probe = static function () use ( $run_id, $import_id, &$last_probe ): void {
-			if ( ( time() - $last_probe ) < self::PROCESSLIST_PROBE_INTERVAL ) {
+		self::$chunk_ticker = static function () use ( $run_id, $import_id, &$last_heartbeat, &$last_probe ): void {
+			$now = time();
+			if ( ( $now - $last_heartbeat ) >= self::HEARTBEAT_INTERVAL ) {
+				$last_heartbeat = $now;
+				MvdWaiCtrlState::touchHeartbeat();
+			}
+			if ( ( $now - $last_probe ) < self::PROCESSLIST_PROBE_INTERVAL ) {
 				return;
 			}
-			$last_probe = time();
+			$last_probe = $now;
 
 			global $wpdb;
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- diagnostica, nessuna API WP equivalente.
@@ -655,19 +712,92 @@ class MvdWaiCtrlRunner {
 			);
 		};
 
-		add_action( 'pmxi_saved_post', self::$processlist_probe, 99, 0 );
+		add_action( 'pmxi_saved_post', self::$chunk_ticker, 99, 0 );
 	}
 
 	/**
-	 * Sgancia la sonda PROCESSLIST da pmxi_saved_post, se presente.
+	 * Sgancia il ticker di chunk da pmxi_saved_post, se presente.
 	 *
 	 * @return void
 	 */
-	private static function detachProcesslistProbe(): void {
-		if ( null === self::$processlist_probe ) {
+	private static function detachChunkTicker(): void {
+		if ( null === self::$chunk_ticker ) {
 			return;
 		}
-		remove_action( 'pmxi_saved_post', self::$processlist_probe, 99 );
-		self::$processlist_probe = null;
+		remove_action( 'pmxi_saved_post', self::$chunk_ticker, 99 );
+		self::$chunk_ticker = null;
+	}
+
+	/**
+	 * Nome del lock MySQL di esecuzione.
+	 *
+	 * I nomi GET_LOCK sono globali sul server MySQL: l'hash di database e prefisso tabelle
+	 * evita collisioni con altri siti sullo stesso server. Lunghezza 45 caratteri (limite 64).
+	 *
+	 * @return string Nome del lock.
+	 */
+	public static function execLockName(): string {
+		global $wpdb;
+		$db_name = defined( 'DB_NAME' ) ? (string) DB_NAME : '';
+		return 'mvd_wai_ctrl_' . md5( $db_name . '|' . $wpdb->prefix );
+	}
+
+	/**
+	 * Tenta di acquisire il lock di esecuzione senza attesa.
+	 *
+	 * Il lock appartiene alla connessione MySQL del processo: se il processo PHP muore,
+	 * MySQL lo rilascia automaticamente. È quindi anche la prova di vita del blocco in corso.
+	 *
+	 * @return bool|null True se acquisito, false se occupato da un altro processo, null se GET_LOCK ha dato errore.
+	 */
+	public static function acquireExecLock(): ?bool {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lock MySQL, nessuna API WP equivalente.
+		$result = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, 0)', self::execLockName() ) );
+		if ( null === $result ) {
+			return null;
+		}
+		return '1' === (string) $result;
+	}
+
+	/**
+	 * Rilascia il lock di esecuzione se posseduto da questa connessione.
+	 *
+	 * @return void
+	 */
+	public static function releaseExecLock(): void {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lock MySQL, nessuna API WP equivalente.
+		$wpdb->query( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', self::execLockName() ) );
+	}
+
+	/**
+	 * Verifica se il lock di esecuzione è libero, cioè se nessun blocco è in esecuzione.
+	 *
+	 * In caso di errore MySQL (risultato NULL) il lock è considerato occupato: meglio
+	 * rifiutare un resume che rischiare due blocchi in parallelo.
+	 *
+	 * @return bool True se nessun processo detiene il lock.
+	 */
+	public static function isExecLockFree(): bool {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lock MySQL, nessuna API WP equivalente.
+		return '1' === (string) $wpdb->get_var( $wpdb->prepare( 'SELECT IS_FREE_LOCK(%s)', self::execLockName() ) );
+	}
+
+	/**
+	 * Verifica che il lock di esecuzione sia ancora posseduto da questa connessione.
+	 *
+	 * Se wpdb si è riconnesso durante il chunk, il lock della vecchia connessione è
+	 * andato perso e un altro processo potrebbe averlo preso.
+	 *
+	 * @phpstan-impure
+	 *
+	 * @return bool True se la connessione corrente detiene il lock.
+	 */
+	public static function ownsExecLock(): bool {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lock MySQL, nessuna API WP equivalente.
+		return '1' === (string) $wpdb->get_var( $wpdb->prepare( 'SELECT IS_USED_LOCK(%s) = CONNECTION_ID()', self::execLockName() ) );
 	}
 }

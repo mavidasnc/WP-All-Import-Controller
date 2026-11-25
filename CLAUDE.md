@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Scopo del plugin
 
-Plugin WordPress che esegue **4 importazioni WP All Import Pro in sequenza** con un singolo click dal pannello admin. Le importazioni vengono lanciate tramite WordPress cron in background, con arresto al primo errore, barra di progresso live (polling AJAX ogni 3 sec) e log persistente su tabella custom.
+Plugin WordPress che esegue **N importazioni WP All Import Pro in sequenza** (configurate in `MVD_WAI_CTRL_IDS`) con un singolo click dal pannello admin. Ogni chunk di ogni import è processato in una richiesta HTTP separata (loopback admin-ajax), con arresto al primo errore, barra di progresso live (polling AJAX ogni 3 sec) e log persistente su tabella custom + file rotante.
 
 **Requisiti runtime:** WordPress >= 6.0, PHP >= 8.1, WP All Import Pro >= 5.0.
 
@@ -15,55 +15,102 @@ Definite in `mvd-wp-all-import-controller.php`:
 | Costante | Valore/Scopo |
 |---|---|
 | `MVD_WAI_CTRL_IDS` | `[ 13, 2, 1, 14 ]` — ID delle importazioni nell'ordine di esecuzione |
-| `MVD_WAI_CTRL_CRON_HOOK` | `mvd_wai_ctrl_run` — nome dell'evento cron |
-| `MVD_WAI_CTRL_STATE_OPTION` | `mvd_wai_ctrl_state` — chiave WP option per lo stato corrente |
-| `MVD_WAI_CTRL_LOCK_KEY` | `mvd_wai_ctrl_running_lock` — chiave transient anti-doppio-avvio (TTL 600 sec) |
+| `MVD_WAI_CTRL_CRON_HOOK` | `mvd_wai_ctrl_run` — nome dell'evento cron (solo fallback) |
+| `MVD_WAI_CTRL_STATE_OPTION` | `mvd_wai_ctrl_state` — chiave WP option per lo stato corrente (autoload off) |
+| `MVD_WAI_CTRL_LOCK_KEY` | `mvd_wai_ctrl_running_lock` — prefisso del transient `{LOCK_KEY}_secret` (token del loopback). Dalla 1.6.0 l'esclusione reciproca usa il lock MySQL `GET_LOCK` (vedi Runner), non più un transient |
 | `MVD_WAI_CTRL_CAPABILITY` | `manage_options` |
+| `MVD_WAI_CTRL_WATCHDOG_THRESHOLD` | `180` — secondi senza attività, **a lock di esecuzione libero**, prima che il watchdog dichiari la catena interrotta |
+| `MVD_WAI_CTRL_SLOW_THRESHOLD` | `600` — secondi senza record salvati, a blocco vivo, prima di segnalarlo come lento in UI (`stalled_sec`) |
+| `MVD_WAI_CTRL_LOG_DIR` | `mvd-wai-ctrl-logs` — sottocartella di `wp-content/uploads/` per i file log |
+| `MVD_WAI_CTRL_LOG_RETENTION_DAYS` | `30` — giorni di conservazione dei file log |
 
 ## Architettura
 
 ### Classi e responsabilità
 
 **`MvdWaiCtrlPlugin`** (`includes/class-plugin.php`)
-Punto di ingresso. Registra tutti gli hook WordPress: menu admin, enqueue assets, handler AJAX (`mvd_wai_ctrl_start` e `mvd_wai_ctrl_status`), hook cron. `ajaxStart()` verifica precondizioni (nonce, capability, WP All Import attivo, assenza di run in corso), crea la riga di log, imposta lo stato `running` e schedula il cron.
+Singleton che registra tutti gli hook WordPress. Handler AJAX registrati:
+- `mvd_wai_ctrl_start` → `ajaxStart()`: verifica precondizioni (nonce, cap, PMXI attivo, lock di controllo, nessun blocco in esecuzione), crea il run_id nel log, imposta stato `running` con un nuovo `chain_id`, chiama `Runner::scheduleSelf()`.
+- `mvd_wai_ctrl_status` → `ajaxStatus()`: restituisce stato corrente, storico run, `exec_alive`, `stalled_sec`, `can_resume`. Contiene il **watchdog**: marca il run `crashed` solo se il lock di esecuzione è libero (nessun processo vivo) **e** l'ultima attività (`State::lastActivity()` = max tra `updated_at` e heartbeat) è più vecchia di `WATCHDOG_THRESHOLD`.
+- `mvd_wai_ctrl_reset` → `ajaxReset()`: sblocca manualmente uno stato bloccato (cancella transient e heartbeat, chiama `State::reset()`). Non può fermare un blocco vivo: quel blocco, al termine, si riconosce come orfano (chain_id azzerato) e non prosegue.
+- `mvd_wai_ctrl_resume` → `ajaxResume()`: riprende da `current_index` senza resettare i counter PMXI. **Rifiutato (409) se il lock di esecuzione è occupato.** A lock libero chiama `Runner::forceStopPmxiCron()` per azzerare `triggered/processing/executing`, genera un nuovo `chain_id` (`markResumeRequested()`) e chiama `Runner::scheduleSelf()`.
+- Start, resume e reset prendono prima il lock MySQL di controllo `{execLockName}_ctl` (`requireControlLock()`), così doppi click o più schede non eseguono l'azione due volte.
+- `mvd_wai_ctrl_run_chain` (nopriv) → `ajaxRunChain()`: endpoint del loopback interno. Autentica il token monouso dal transient `{LOCK_KEY}_secret` (TTL 60 s), chiama `ignore_user_abort(true)` e poi `Runner::runStep( $chain_id )`.
 
 **`MvdWaiCtrlRunner`** (`includes/class-runner.php`)
-Eseguito dall'hook cron. Acquisisce il lock transient, itera su `MVD_WAI_CTRL_IDS`, per ogni ID istanzia `PMXI_Import_Record` e chiama `execute()`. Al primo errore interrompe la catena. Aggiorna `MvdWaiCtrlState` a ogni passo e chiude il run nel logger.
+Processa **un singolo chunk** di un singolo import per invocazione. Logica di `runStep()`:
+1. Acquisisce il lock MySQL `GET_LOCK( execLockName(), 0 )` (nome = hash di `DB_NAME` + prefisso). Se occupato esce (log `SKIP`); se GET_LOCK dà errore chiude il run in errore. Il lock è legato alla connessione: se il processo muore MySQL lo rilascia, quindi `isExecLockFree()` è la prova di vita del blocco. Registra uno shutdown handler PHP per intercettare fatal/OOM. Se il `chain_id` ricevuto non è quello dello stato, l'hop viene scartato (`isCurrentChain()`; uno stato senza chain_id, da versioni < 1.6.0, accetta qualsiasi hop).
+2. Forza `pmxi_is_admin_dashboard_or_cron_import` → true (necessario in contesto cron dove `is_admin()=false`).
+3. Se è il primo chunk di un import nuovo (`current_step_total_chunks == 0` e non resume): azzera i counter PMXI (`imported`, `created`, `updated`, `skipped`, `queue_chunk_number`, `processing`), fa cleanup history eccedenti `log_storage`, crea un record `PMXI_History_Record` (type `processing`).
+4. Se resume (`state['resuming'] == true`): salta il reset counter, riusa o crea l'history record, poi imposta `resuming=false` (anche con resume a metà passo; `advanceToNextImport()` lo azzera comunque).
+5. Chiama `$import->execute()` con output buffer (output HTML appendito al file log nativo WPAI). Durante il chunk un ticker su `pmxi_saved_post` aggiorna l'heartbeat (option `mvd_wai_ctrl_heartbeat`, ogni 20 s) e campiona PROCESSLIST (ogni 30 s). Dopo `execute()` verifica di possedere ancora lock e catena (`ownsExecLock()`), altrimenti l'hop è orfano: non scrive stato e non ri-schedula. Uno status PMXI ≠ 200 a import concluso diventa un passo `warning`; con chunk pendenti è un errore.
+6. Se `queue_chunk_number > 0` → `updateChunk()` + `scheduleSelf()` (stesso import, chunk successivo).
+7. Se `queue_chunk_number == 0` → `appendStep()` success + `advanceToNextImport()`:
+   - Se ci sono altri import → `scheduleSelf()`.
+   - Se è l'ultimo → `closeRun('success')` + `finishRun('completed')`.
+8. In caso di eccezione → `appendStep()` error + `closeRun('error')` + `finishRun('error')`.
+9. Il lock è rilasciato (`RELEASE_LOCK`) in un blocco post-try, sempre una sola volta e **prima** di `scheduleSelf()`.
+
+`scheduleSelf( $chain_id )`: genera token monouso, tenta `wp_remote_post` non-bloccante (timeout 1 s) al loopback passando `chain_id`. Se fallisce (WP_Error, in pratica raro con cURL) → `wp_schedule_single_event( ..., [ $chain_id ] ) + spawn_cron` come fallback, loggato su file.
+
+`forceStopPmxiCron(int $import_id)`: query diretta su `{prefix}pmxi_imports` per azzerare `triggered/processing/executing` prima di un resume.
 
 **`MvdWaiCtrlLogger`** (`includes/class-logger.php`)
-CRUD sulla tabella `{prefix}mvd_wai_ctrl_log`. Metodi chiave: `createRun()` → `run_id`, `appendStep()`, `closeRun()`, `getRecentRuns( $limit )`. La tabella è creata all'attivazione del plugin con `dbDelta()`.
+Due sistemi di log paralleli:
+- **Tabella DB** `{prefix}mvd_wai_ctrl_log`: `createRun()` → `run_id`, `appendStep()`, `closeRun()`, `markRunCrashed()`, `getRecentRuns($limit)`.
+- **File rotante** in `wp-content/uploads/mvd-wai-ctrl-logs/YYYY-MM-DD.log`: `writeFile($level, $message, $context)`. La cartella è protetta con `.htaccess` deny-all. Pulizia file oltre `LOG_RETENTION_DAYS` giorni, eseguita opportunisticamente una volta al giorno via transient.
 
 **`MvdWaiCtrlState`** (`includes/class-state.php`)
-Wrapper sull'option `mvd_wai_ctrl_state` (autoload `no`). Espone `isRunning()`, `startRun()`, `updateStep()`, `finishRun()`, `get()`, `save()`.
+Wrapper sull'option `mvd_wai_ctrl_state`. Campi chiave dello stato:
+
+| Campo | Tipo | Note |
+|---|---|---|
+| `status` | string | `idle`, `running`, `completed`, `error` |
+| `run_id` | int | ID della riga header nel log |
+| `current_index` | int | Indice 0-based dell'import corrente in `MVD_WAI_CTRL_IDS` |
+| `current_chunk_done` | int | `queue_chunk_number` PMXI (record già processati) |
+| `current_step_total_chunks` | int | `count` totale record PMXI (`0` = primo chunk non ancora eseguito) |
+| `updated_at` | int | Unix timestamp UTC aggiornato ad ogni `save()`. Usato dal watchdog. Migrazione automatica da stringa MySQL (versioni < 1.5.1) in `State::get()`. |
+| `resuming` | bool | `true` → il prossimo `runStep()` salta il reset counter PMXI |
+| `crash_reason` | string\|null | Popolato da watchdog o shutdown handler |
+| `chain_id` | string | Catena di hop valida, rigenerata a start/resume. `''` negli stati creati da versioni < 1.6.0 |
+| `current_step_history_log_id` | int | ID del record `wp_pmxi_history` per lo step corrente |
 
 **`MvdWaiCtrlAdminPage`** (`includes/class-admin-page.php`)
-Render HTML del pannello admin: avvisi prerequisiti, pulsante avvio, barra di progresso, storico ultimi 20 run con dettaglio step.
+Render HTML del pannello admin: avvisi prerequisiti, pulsante avvio, barra di progresso, banner errore con pulsanti "Riprendi" / "Reset", storico ultimi 20 run con dettaglio step espandibile.
 
-### Flusso di esecuzione
+### Flusso di esecuzione (architettura 1-chunk-per-loopback)
 
 ```
 Click "Avvia" (browser)
   → ajaxStart() — nonce + cap check, crea run_id, stato 'running'
-     → wp_remote_post (loopback non-bloccante, timeout 0.01s)
-        → wp_ajax_nopriv_mvd_wai_ctrl_run_chain → ajaxRunChain()
-           → autentica token monouso (transient _secret, TTL 60s)
-              → MvdWaiCtrlRunner::runChain()
-                 → per ogni import_id: updateStep → PMXI execute → appendStep
-                 → closeRun + finishRun (completed | error)
-     [fallback se loopback fallisce]
-     → wp_schedule_single_event + spawn_cron → MVD_WAI_CTRL_CRON_HOOK
-        → MvdWaiCtrlRunner::runChain()
+     → Runner::scheduleSelf()
+        → wp_remote_post loopback non-bloccante (timeout 0.01s)
+           → wp_ajax_nopriv_mvd_wai_ctrl_run_chain → ajaxRunChain()
+              → verifica token monouso (transient _secret, TTL 60s)
+                 → Runner::runStep() — processa 1 chunk
+                    → se chunk incompleto → scheduleSelf() [loop]
+                    → se import completo + altri import → scheduleSelf() [avanza]
+                    → se tutti completi → finishRun('completed')
+        [fallback se loopback fallisce]
+        → wp_schedule_single_event + spawn_cron → MVD_WAI_CTRL_CRON_HOOK
+           → Runner::runStep()
 
 Polling (admin.js ogni 3 sec)
-  → ajaxStatus() → MvdWaiCtrlState::get() + Logger::getRecentRuns()
+  → ajaxStatus() → watchdog + State::get() + Logger::getRecentRuns(20)
      → aggiornamento barra progresso e tabella storico
+
+Crash recovery
+  → shutdown handler PHP → markRunCrashed() + writeFile('FATAL') + markCrashed()
+  → watchdog in ajaxStatus() → markRunCrashed() + writeFile('ERROR') + markCrashed()
+  → utente clicca "Riprendi" (disponibile solo a lock libero) → ajaxResume() → forceStopPmxiCron() + nuovo chain_id + scheduleSelf()
 ```
 
-Il loopback è la via primaria perché garantisce `is_admin() = true`, necessario affinché WP All Import Pro carichi `PMXI_Import_Record` (classe admin-only). Il cron è solo fallback.
+Il loopback è la via primaria perché garantisce `is_admin() = true`, necessario affinché WP All Import Pro carichi `PMXI_Import_Record` (classe admin-only). 1 richiesta HTTP per chunk risolve anche il bug del singleton `WPAI_WPML` che non resettava `$language_code` tra import consecutivi.
 
 ### Autoload
 
-Mappa PSR-4-like semplice definita nel file principale: `MvdWaiCtrl{Suffix}` → `includes/class-{suffix-kebab}.php`.
+`MvdWaiCtrl{Suffix}` → `includes/class-{suffix-kebab}.php`. Definito in `mvd-wp-all-import-controller.php` tramite `spl_autoload_register`.
 
 ### Frontend
 
@@ -71,18 +118,26 @@ Mappa PSR-4-like semplice definita nel file principale: `MvdWaiCtrl{Suffix}` →
 
 ## Comandi di sviluppo
 
-### Test e analisi statica
-
 ```bash
 composer test               # PHPUnit (tests/Unit/)
 composer phpstan            # PHPStan level 5 su includes/ e file principale
 composer check              # PHPStan + PHPUnit in sequenza
+composer build:readme       # Rigenera readme.txt da CHANGELOG.md (obbligatorio prima di taggare)
 vendor/bin/phpunit --filter NomeTest   # singolo test
 ```
 
 I test usano **Brain Monkey** (mock WP functions) e **Mockery**. Gli stub per `PMXI_Import_Record` e `$wpdb` sono in `tests/stubs/`. Il bootstrap dei test carica le classi direttamente senza il file principale del plugin.
 
-### Ambiente locale wp-env
+## Release
+
+1. Aggiorna `CHANGELOG.md`.
+2. Bumpa `MVD_WAI_CTRL_VERSION` nel file principale (header + costante).
+3. Esegui `composer build:readme` (rigenera `readme.txt`).
+4. Commit di tutti e tre i file + tag `vX.Y.Z` + push tag.
+
+Il workflow `.github/workflows/release.yml` verifica che `readme.txt` sia in sincrono con `CHANGELOG.md` (fallisce altrimenti), poi builda lo zip e crea la GitHub Release. `scripts/generate-readme.php` è lo script alla base di `composer build:readme`.
+
+## Ambiente locale wp-env
 
 ```bash
 npx wp-env start    # dev su :8888
@@ -98,6 +153,10 @@ Text domain: `mvd-wai-ctrl`. Tutte le stringhe visibili usano `__()` / `esc_html
 
 ## Database
 
-Tabella: `{wp_prefix}mvd_wai_ctrl_log`  
-Indici: PK `id`, `run_id`, `created_at`.  
-Rimossa al plugin uninstall tramite `uninstall.php`.
+Tabella: `{wp_prefix}mvd_wai_ctrl_log`
+
+Colonne chiave: `run_id`, `is_run_header` (1 = riga di apertura run, 0 = step), `step_index`, `import_id`, `import_name`, `outcome` (`start`, `success`, `error`, `crashed`, `info`), `created`, `updated`, `skipped`, `duration_sec`, `message`, `started_at`, `created_at`.
+
+Indici: PK `id`, `idx_run_id (run_id)`, `idx_run_header (is_run_header, id)`, `idx_created_at (created_at)`.
+
+`createTable()` usa `dbDelta()` ed è invocata sia all'attivazione sia a `plugins_loaded` se `mvd_wai_ctrl_db_version` è diversa da `MVD_WAI_CTRL_DB_VERSION`. La tabella è rimossa all'uninstall tramite `uninstall.php`.

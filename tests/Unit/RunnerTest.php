@@ -52,48 +52,64 @@ class RunnerTest extends TestCase {
 	}
 
 	public function test_run_step_aborts_immediately_when_lock_is_set(): void {
-		// writeFile() (traccia SKIP) usa a sua volta get/set_transient per la pulizia giornaliera:
-		// si registrano le chiavi e si verifica che il lock non venga mai ri-acquisito.
-		$set_keys = [];
-		Functions\when( 'get_transient' )->alias(
-			static fn( $key ) => MVD_WAI_CTRL_LOCK_KEY === $key ? 1 : true
-		);
-		Functions\when( 'set_transient' )->alias(
-			function ( $key ) use ( &$set_keys ): bool {
-				$set_keys[] = $key;
-				return true;
-			}
-		);
+		// Lock MySQL occupato da un altro processo: l'hop si spegne senza leggere lo stato.
+		$wpdb               = $this->createWpdbMock();
+		$wpdb->sim_get_lock = '0';
+		// writeFile() (traccia SKIP) usa get/set_transient per la pulizia giornaliera dei log.
+		Functions\when( 'get_transient' )->justReturn( true );
 		Functions\expect( 'get_option' )->never();
 
 		\MvdWaiCtrlRunner::runStep();
 
-		$this->assertNotContains( MVD_WAI_CTRL_LOCK_KEY, $set_keys );
+		$this->assertCount( 1, $wpdb->lock_queries, 'Nessun RELEASE_LOCK: il lock non è di questo processo.' );
 	}
 
-	public function test_run_step_acquires_lock_with_correct_ttl(): void {
-		Functions\when( 'get_transient' )->justReturn( false );
-		Functions\expect( 'set_transient' )
-			->once()
-			->with( MVD_WAI_CTRL_LOCK_KEY, 1, 120 );
-
+	public function test_run_step_acquires_mysql_lock_without_wait(): void {
+		$wpdb = $this->createWpdbMock();
 		Functions\when( 'add_filter' )->justReturn( true );
 		Functions\when( 'get_option' )->justReturn( [ 'status' => 'idle' ] );
-		Functions\when( 'delete_transient' )->justReturn( true );
+
+		\MvdWaiCtrlRunner::runStep();
+
+		$this->assertMatchesRegularExpression( "/^SELECT GET_LOCK\\(.+, 0\\)$/", $wpdb->lock_queries[0] );
+		$this->assertStringContainsString( \MvdWaiCtrlRunner::execLockName(), $wpdb->lock_queries[0] );
+	}
+
+	public function test_run_step_stops_chain_when_get_lock_errors(): void {
+		$wpdb               = $this->createWpdbMock();
+		$wpdb->sim_get_lock = null;
+		Functions\when( 'get_transient' )->justReturn( true );
+		Functions\when( 'current_time' )->justReturn( '2024-01-01 00:00:00' );
+		Functions\when( '__' )->returnArg();
+		Functions\when( 'get_option' )->justReturn( [ 'status' => 'running' ] );
+		Functions\expect( 'update_option' )
+			->once()
+			->with( MVD_WAI_CTRL_STATE_OPTION, Mockery::on( fn( $v ) => 'error' === $v['status'] ), false );
 
 		\MvdWaiCtrlRunner::runStep();
 	}
 
 	public function test_run_step_releases_lock_when_state_is_not_running(): void {
-		Functions\when( 'get_transient' )->justReturn( false );
-		Functions\when( 'set_transient' )->justReturn( true );
+		$wpdb = $this->createWpdbMock();
 		Functions\when( 'get_option' )->justReturn( [ 'status' => 'idle' ] );
 		Functions\when( 'add_filter' )->justReturn( true );
-		Functions\expect( 'delete_transient' )->once()->with( MVD_WAI_CTRL_LOCK_KEY );
-
-		$this->createWpdbMock();
 
 		\MvdWaiCtrlRunner::runStep();
+
+		$this->assertStringContainsString( 'RELEASE_LOCK', end( $wpdb->lock_queries ) );
+	}
+
+	public function test_run_step_discards_hop_of_superseded_chain(): void {
+		$wpdb = $this->createWpdbMock();
+		Functions\when( 'add_filter' )->justReturn( true );
+		Functions\when( 'get_transient' )->justReturn( true );
+		Functions\when( 'get_option' )->justReturn( [ 'status' => 'running', 'chain_id' => 'current-chain' ] );
+		Functions\expect( 'update_option' )->never();
+		Functions\expect( 'wp_remote_post' )->never();
+
+		\MvdWaiCtrlRunner::runStep( 'old-chain' );
+
+		$this->assertStringContainsString( 'RELEASE_LOCK', end( $wpdb->lock_queries ) );
 	}
 
 	public function test_run_step_errors_when_pmxi_class_missing(): void {
@@ -106,9 +122,7 @@ class RunnerTest extends TestCase {
 	}
 
 	public function test_run_step_forces_pmxi_admin_filter(): void {
-		Functions\when( 'get_transient' )->justReturn( false );
-		Functions\when( 'set_transient' )->justReturn( true );
-		Functions\when( 'delete_transient' )->justReturn( true );
+		$this->createWpdbMock();
 		// Verifica che add_filter venga chiamato con il filtro PMXI.
 		// Il filtro è aggiunto prima del check isRunning(), quindi funziona anche con stato idle.
 		Functions\expect( 'add_filter' )
@@ -253,7 +267,6 @@ class RunnerTest extends TestCase {
 
 		Functions\when( 'get_transient' )->justReturn( false );
 		Functions\when( 'set_transient' )->justReturn( true );
-		Functions\expect( 'delete_transient' )->once()->with( MVD_WAI_CTRL_LOCK_KEY );
 		$this->stubCommonWpFunctions( run_id: 5, current_index: 0 );
 
 		$wpdb = $this->createWpdbMock();
@@ -261,6 +274,9 @@ class RunnerTest extends TestCase {
 		$wpdb->shouldReceive( 'update' )->andReturn( 1 );
 
 		\MvdWaiCtrlRunner::runStep();
+
+		$releases = array_filter( $wpdb->lock_queries, static fn( $q ) => str_contains( $q, 'RELEASE_LOCK' ) );
+		$this->assertCount( 1, $releases, 'Il lock va rilasciato una sola volta anche in caso di errore.' );
 	}
 
 	public function test_run_step_handles_import_not_found(): void {
@@ -474,11 +490,15 @@ class RunnerTest extends TestCase {
 		$wp_error->shouldReceive( 'get_error_message' )->andReturn( 'cURL error 28' );
 		// writeFile() del fallback: pulizia giornaliera log già eseguita.
 		Functions\when( 'get_transient' )->justReturn( true );
+		Functions\when( 'get_option' )->justReturn( [ 'status' => 'running', 'chain_id' => 'chain-x' ] );
 		Functions\when( 'wp_remote_post' )->justReturn( $wp_error );
 		Functions\when( 'is_wp_error' )->justReturn( true );
 
 		Functions\expect( 'delete_transient' )->once()->with( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
-		Functions\expect( 'wp_schedule_single_event' )->once();
+		// L'evento cron porta con sé il chain_id della catena corrente.
+		Functions\expect( 'wp_schedule_single_event' )
+			->once()
+			->with( Mockery::type( 'int' ), MVD_WAI_CTRL_CRON_HOOK, [ 'chain-x' ] );
 		Functions\expect( 'spawn_cron' )->once();
 
 		// set_transient per il secret deve essere chiamato prima del remote_post.

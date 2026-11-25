@@ -14,6 +14,16 @@ defined( 'ABSPATH' ) || exit;
 class MvdWaiCtrlState {
 
 	/**
+	 * Option con il timestamp UTC dell'ultimo record salvato dall'import in corso.
+	 *
+	 * Separata da MVD_WAI_CTRL_STATE_OPTION per non riscrivere l'intero stato a ogni record
+	 * (read-modify-write) durante l'esecuzione di un chunk.
+	 *
+	 * @var string
+	 */
+	public const HEARTBEAT_OPTION = 'mvd_wai_ctrl_heartbeat';
+
+	/**
 	 * Struttura di stato vuota (idle).
 	 *
 	 * @return array<string, mixed>
@@ -37,6 +47,7 @@ class MvdWaiCtrlState {
 			'resuming'                  => false,  // true → il prossimo runStep salta il reset PMXI counters
 			'crash_reason'              => null,   // messaggio popolato da watchdog o shutdown handler
 			'current_step_history_log_id' => 0,   // ID del record wp_pmxi_history per lo step corrente
+			'chain_id'                  => '',    // identificativo della catena di hop valida (rigenerato a start/resume)
 		];
 	}
 
@@ -109,6 +120,7 @@ class MvdWaiCtrlState {
 					'current_step_started_at'   => '',
 					'started_at'                => current_time( 'mysql' ),
 					'finished_at'               => null,
+					'chain_id'                  => self::newChainId(),
 				]
 			)
 		);
@@ -282,6 +294,65 @@ class MvdWaiCtrlState {
 		$state['resuming']     = true;
 		$state['crash_reason'] = null;
 		$state['finished_at']  = null;
+		// Nuova catena: eventuali hop della catena precedente ancora in volo verranno scartati.
+		$state['chain_id']     = self::newChainId();
 		self::save( $state );
+	}
+
+	/**
+	 * Genera un nuovo identificativo di catena.
+	 *
+	 * @return string Stringa casuale di 20 caratteri alfanumerici.
+	 */
+	private static function newChainId(): string {
+		return wp_generate_password( 20, false );
+	}
+
+	/**
+	 * Restituisce l'identificativo della catena valida.
+	 *
+	 * @return string chain_id corrente ('' per stati creati da versioni precedenti alla 1.6.0).
+	 */
+	public static function getChainId(): string {
+		return (string) ( self::get()['chain_id'] ?? '' );
+	}
+
+	/**
+	 * Verifica che un hop appartenga alla catena valida.
+	 *
+	 * Uno stato senza chain_id (run avviato con una versione precedente) accetta qualsiasi hop,
+	 * così un aggiornamento del plugin non interrompe la catena in corso.
+	 *
+	 * @phpstan-impure Lo stato può cambiare durante un chunk (Reset/Resume da un'altra richiesta).
+	 *
+	 * @param string $chain_id Identificativo ricevuto dal loopback o dall'evento cron.
+	 * @return bool            True se l'hop può procedere.
+	 */
+	public static function isCurrentChain( string $chain_id ): bool {
+		$current = self::getChainId();
+		return '' === $current || hash_equals( $current, $chain_id );
+	}
+
+	/**
+	 * Registra l'attività dell'import in corso (heartbeat leggero, solo timestamp).
+	 *
+	 * @return void
+	 */
+	public static function touchHeartbeat(): void {
+		update_option( self::HEARTBEAT_OPTION, time(), false );
+	}
+
+	/**
+	 * Restituisce il timestamp UTC dell'ultima attività nota del run.
+	 *
+	 * È il più recente tra updated_at (ultima scrittura dello stato) e l'heartbeat
+	 * scritto durante l'elaborazione dei record.
+	 *
+	 * @param array<string, mixed>|null $state Stato già letto (null = lo legge).
+	 * @return int                           Unix timestamp UTC (0 se mai aggiornato).
+	 */
+	public static function lastActivity( ?array $state = null ): int {
+		$state = $state ?? self::get();
+		return max( (int) ( $state['updated_at'] ?? 0 ), (int) get_option( self::HEARTBEAT_OPTION, 0 ) );
 	}
 }

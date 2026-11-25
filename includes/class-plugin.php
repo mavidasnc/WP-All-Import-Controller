@@ -29,7 +29,7 @@ class MvdWaiCtrlPlugin {
 		add_action( 'wp_ajax_mvd_wai_ctrl_resume', [ __CLASS__, 'ajaxResume' ] );
 
 		// Hook cron one-time (fallback nel caso il loopback non sia disponibile).
-		add_action( MVD_WAI_CTRL_CRON_HOOK, [ 'MvdWaiCtrlRunner', 'runStep' ] );
+		add_action( MVD_WAI_CTRL_CRON_HOOK, [ 'MvdWaiCtrlRunner', 'runStep' ], 10, 1 );
 
 		// Endpoint loopback per esecuzione in contesto admin (is_admin() = true garantito).
 		add_action( 'wp_ajax_nopriv_mvd_wai_ctrl_run_chain', [ __CLASS__, 'ajaxRunChain' ] );
@@ -121,6 +121,9 @@ class MvdWaiCtrlPlugin {
 			);
 		}
 
+		// Serializza start/resume/reset concorrenti (doppio click, più schede aperte).
+		self::requireControlLock();
+
 		if ( MvdWaiCtrlState::isRunning() ) {
 			wp_send_json_error(
 				[ 'message' => __( 'Un\'importazione è già in corso. Attendere il completamento.', 'mvd-wai-ctrl' ) ],
@@ -128,10 +131,10 @@ class MvdWaiCtrlPlugin {
 			);
 		}
 
-		// Lock precauzionale: evita race condition tra check e schedule.
-		if ( get_transient( MVD_WAI_CTRL_LOCK_KEY ) ) {
+		// Un blocco di un run precedente (es. dopo un Reset) può essere ancora in esecuzione.
+		if ( ! MvdWaiCtrlRunner::isExecLockFree() ) {
 			wp_send_json_error(
-				[ 'message' => __( 'Sistema occupato. Riprovare tra qualche secondo.', 'mvd-wai-ctrl' ) ],
+				[ 'message' => __( 'Un blocco di importazione è ancora in esecuzione. Attendere che termini prima di avviare.', 'mvd-wai-ctrl' ) ],
 				409
 			);
 		}
@@ -179,7 +182,8 @@ class MvdWaiCtrlPlugin {
 		// l'import PMXI a metà con processing=1 e nessun errore nei log (come fa wp-cron.php).
 		ignore_user_abort( true );
 
-		MvdWaiCtrlRunner::runStep();
+		$chain_id = sanitize_text_field( wp_unslash( $_POST['chain_id'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+		MvdWaiCtrlRunner::runStep( $chain_id );
 		wp_die();
 	}
 
@@ -195,11 +199,24 @@ class MvdWaiCtrlPlugin {
 			wp_send_json_error( [ 'message' => __( 'Permesso negato.', 'mvd-wai-ctrl' ) ], 403 );
 		}
 
-		delete_transient( MVD_WAI_CTRL_LOCK_KEY );
+		self::requireControlLock();
+
+		// Il Reset non può fermare un blocco già in esecuzione: azzerando lo stato (e il chain_id)
+		// quel blocco, al termine, si riconosce come orfano e non scrive né ri-schedula nulla.
+		$exec_alive = ! MvdWaiCtrlRunner::isExecLockFree();
+
+		delete_transient( MVD_WAI_CTRL_LOCK_KEY ); // Lock transient delle versioni < 1.6.0.
 		delete_transient( MVD_WAI_CTRL_LOCK_KEY . '_secret' );
+		delete_option( MvdWaiCtrlState::HEARTBEAT_OPTION );
 		MvdWaiCtrlState::reset();
 
-		wp_send_json_success( [ 'message' => __( 'Stato resettato.', 'mvd-wai-ctrl' ) ] );
+		wp_send_json_success(
+			[
+				'message' => $exec_alive
+					? __( 'Stato resettato. Un blocco è ancora in esecuzione: terminerà senza proseguire la catena; attendere prima di avviare.', 'mvd-wai-ctrl' )
+					: __( 'Stato resettato.', 'mvd-wai-ctrl' ),
+			]
+		);
 	}
 
 	/**
@@ -217,19 +234,24 @@ class MvdWaiCtrlPlugin {
 			wp_send_json_error( [ 'message' => __( 'Permesso negato.', 'mvd-wai-ctrl' ) ], 403 );
 		}
 
-		$state = MvdWaiCtrlState::get();
+		$state       = MvdWaiCtrlState::get();
+		$exec_alive  = ! MvdWaiCtrlRunner::isExecLockFree();
+		$last_seen   = MvdWaiCtrlState::lastActivity( $state );
+		$elapsed     = $last_seen > 0 ? time() - $last_seen : 0;
+		$stalled_sec = 0;
 
-		// Watchdog: rileva cron morto senza heartbeat.
+		// Watchdog: la catena è morta solo se nessun processo detiene il lock di esecuzione
+		// (MySQL lo rilascia alla morte del processo) e non c'è attività recente. Un blocco
+		// lungo ma vivo detiene il lock e non viene mai dichiarato crashed.
 		if (
 			'running' === $state['status']
-			&& ! empty( $state['updated_at'] )
-			&& ( time() - (int) $state['updated_at'] ) > MVD_WAI_CTRL_WATCHDOG_THRESHOLD
-			&& ! get_transient( MVD_WAI_CTRL_LOCK_KEY )
+			&& ! $exec_alive
+			&& $last_seen > 0
+			&& $elapsed > MVD_WAI_CTRL_WATCHDOG_THRESHOLD
 		) {
-			$elapsed = time() - (int) $state['updated_at'];
 			$reason  = sprintf(
-				/* translators: %d: secondi dall'ultimo heartbeat */
-				__( 'Cron interrotto: nessun heartbeat da %d secondi.', 'mvd-wai-ctrl' ),
+				/* translators: %d: secondi dall'ultima attività */
+				__( 'Catena interrotta: nessun blocco in esecuzione e nessuna attività da %d secondi.', 'mvd-wai-ctrl' ),
 				$elapsed
 			);
 			$run_id = (int) $state['run_id'];
@@ -239,8 +261,14 @@ class MvdWaiCtrlPlugin {
 			$state = MvdWaiCtrlState::get();
 		}
 
+		// Blocco vivo ma senza record salvati da molto: lo si segnala senza proporre azioni.
+		if ( 'running' === $state['status'] && $exec_alive && $elapsed > MVD_WAI_CTRL_SLOW_THRESHOLD ) {
+			$stalled_sec = $elapsed;
+		}
+
 		$can_resume = (
 			'error' === $state['status']
+			&& ! $exec_alive
 			&& (int) $state['current_index'] < count( MVD_WAI_CTRL_IDS )
 		);
 
@@ -248,11 +276,33 @@ class MvdWaiCtrlPlugin {
 
 		wp_send_json_success(
 			[
-				'state'      => $state,
-				'runs'       => $runs,
-				'can_resume' => $can_resume,
+				'state'       => $state,
+				'runs'        => $runs,
+				'can_resume'  => $can_resume,
+				'exec_alive'  => $exec_alive,
+				'stalled_sec' => $stalled_sec,
 			]
 		);
+	}
+
+	/**
+	 * Acquisisce il lock MySQL delle azioni di controllo (start, resume, reset) o termina la richiesta.
+	 *
+	 * Il lock è legato alla connessione della richiesta AJAX e viene rilasciato da MySQL
+	 * a fine richiesta: due click ravvicinati non possono eseguire l'azione due volte.
+	 *
+	 * @return void
+	 */
+	private static function requireControlLock(): void {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery -- lock MySQL, nessuna API WP equivalente.
+		$acquired = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, 0)', MvdWaiCtrlRunner::execLockName() . '_ctl' ) );
+		if ( '1' !== (string) $acquired ) {
+			wp_send_json_error(
+				[ 'message' => __( 'Un\'altra operazione è in corso. Riprovare tra qualche secondo.', 'mvd-wai-ctrl' ) ],
+				409
+			);
+		}
 	}
 
 	/**
@@ -270,12 +320,23 @@ class MvdWaiCtrlPlugin {
 			wp_send_json_error( [ 'message' => __( 'Permesso negato.', 'mvd-wai-ctrl' ) ], 403 );
 		}
 
+		self::requireControlLock();
+
 		$state = MvdWaiCtrlState::get();
 
 		if ( 'error' !== $state['status'] ) {
 			wp_send_json_error(
 				[ 'message' => __( 'Nessun run interrotto da riprendere.', 'mvd-wai-ctrl' ) ],
 				400
+			);
+		}
+
+		// Mai riprendere sopra un blocco ancora vivo: due esecuzioni dello stesso import
+		// in parallelo causano deadlock e contatori incoerenti.
+		if ( ! MvdWaiCtrlRunner::isExecLockFree() ) {
+			wp_send_json_error(
+				[ 'message' => __( 'Il blocco interrotto è ancora in esecuzione. Attendere che termini prima di riprendere.', 'mvd-wai-ctrl' ) ],
+				409
 			);
 		}
 
@@ -289,10 +350,10 @@ class MvdWaiCtrlPlugin {
 		$run_id     = (int) $state['run_id'];
 		$step_index = (int) $state['current_index'];
 
-		// Forza l'arresto dei flag runtime PMXI (triggered/processing/executing) sull'import corrente.
-		// Se il cron PMXI è ancora attivo sulla riga, execute() non ripartirebbe fino al rilascio
-		// spontaneo dei flag. Il reset è limitato ai 3 flag di esecuzione: queue_chunk_number e i
-		// counter restano intatti così PMXI riprende dal record esatto dove si era fermato.
+		// Azzera i flag runtime PMXI (triggered/processing/executing) sull'import corrente.
+		// Il lock di esecuzione è libero, quindi nessun blocco del controller sta lavorando:
+		// processing=1 è un residuo del processo morto. queue_chunk_number e i counter restano
+		// intatti così PMXI riprende dal record esatto dove si era fermato.
 		$ids_resume        = MVD_WAI_CTRL_IDS;
 		$import_id_resume  = isset( $ids_resume[ $step_index ] ) ? (int) $ids_resume[ $step_index ] : null;
 		if ( null !== $import_id_resume ) {
@@ -325,9 +386,6 @@ class MvdWaiCtrlPlugin {
 				);
 			}
 		}
-		// Attesa breve: lascia il tempo a un eventuale tick PMXI ancora in volo di terminare.
-		sleep( 3 );
-
 		// Aggiunge una riga nel log per tracciare la ripresa.
 		MvdWaiCtrlLogger::appendStep(
 			$run_id,
