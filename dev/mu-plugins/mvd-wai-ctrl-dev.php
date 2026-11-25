@@ -203,6 +203,9 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 						'multiple_product_type'        => 'simple',
 						'single_product_sku'           => '{sku[1]}',
 						'single_product_regular_price' => '{price[1]}',
+						// Senza questo WPAI salta i record invariati dal run precedente: nessun
+						// pmxi_saved_post, quindi niente simulatore. Su staging il feed cambia sempre.
+						'is_selective_hashing'         => 0,
 					]
 				);
 
@@ -301,6 +304,241 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			MvdWaiCtrlState::startRun( $run_id );
 			MvdWaiCtrlRunner::scheduleSelf();
 			WP_CLI::success( sprintf( 'Run %d avviato.', $run_id ) );
+		}
+
+		/**
+		 * Esegue il polling del pannello (ajaxStatus, watchdog incluso) come farebbe il browser.
+		 *
+		 * @return void
+		 */
+		public function poll(): void {
+			$this->printPoll( $this->callAjax( [ 'MvdWaiCtrlPlugin', 'ajaxStatus' ], 'mvd_wai_ctrl_status' ) );
+		}
+
+		/**
+		 * Esegue il polling del pannello in loop, caricando WordPress una sola volta.
+		 *
+		 * Su Docker per Windows ogni comando WP-CLI impiega decine di secondi solo per il bootstrap:
+		 * questo comando permette di osservare il watchdog con la cadenza reale del pannello.
+		 *
+		 * ## OPTIONS
+		 *
+		 * [--interval=<s>]
+		 * : Secondi tra due poll.
+		 * ---
+		 * default: 15
+		 * ---
+		 *
+		 * [--duration=<s>]
+		 * : Durata massima dell'osservazione.
+		 * ---
+		 * default: 900
+		 * ---
+		 *
+		 * [--start]
+		 * : Avvia la catena prima di iniziare il polling.
+		 *
+		 * [--auto-resume]
+		 * : Preme "Riprendi" (una volta) appena il pannello lo rende disponibile.
+		 *
+		 * ## EXAMPLES
+		 *
+		 *     wp mvd-dev watch --start --interval=15 --duration=600
+		 *
+		 * @param array<int, string>    $args       Argomenti posizionali (non usati).
+		 * @param array<string, string> $assoc_args Opzioni.
+		 * @return void
+		 */
+		public function watch( array $args, array $assoc_args ): void {
+			$interval = max( 1, (int) ( $assoc_args['interval'] ?? 15 ) );
+			$deadline = time() + max( $interval, (int) ( $assoc_args['duration'] ?? 900 ) );
+			$resumed  = false;
+
+			if ( isset( $assoc_args['start'] ) ) {
+				$this->start();
+			}
+
+			while ( time() < $deadline ) {
+				// Le option sono in cache nel processo: senza svuotarla si leggerebbe uno stato vecchio.
+				wp_cache_flush();
+				$data = $this->callAjax( [ 'MvdWaiCtrlPlugin', 'ajaxStatus' ], 'mvd_wai_ctrl_status' );
+				$this->printPoll( $data );
+
+				$status = $data['data']['state']['status'] ?? '';
+				if ( isset( $assoc_args['auto-resume'] ) && ! $resumed && ! empty( $data['data']['can_resume'] ) ) {
+					$resumed = true;
+					wp_cache_flush();
+					$this->resume();
+					sleep( $interval );
+					continue;
+				}
+				if ( in_array( $status, [ 'completed', 'idle' ], true ) || ( 'error' === $status && empty( $data['data']['exec_alive'] ) && ( $resumed || ! isset( $assoc_args['auto-resume'] ) ) ) ) {
+					break;
+				}
+				sleep( $interval );
+			}
+		}
+
+		/**
+		 * Stampa una riga di sintesi di una risposta di ajaxStatus.
+		 *
+		 * @param array<string, mixed> $data Risposta JSON decodificata.
+		 * @return void
+		 */
+		private function printPoll( array $data ): void {
+			$state = $data['data']['state'] ?? [];
+			WP_CLI::log(
+				sprintf(
+					'%s poll: status=%s exec_alive=%s stalled_sec=%d can_resume=%s passo=%d record=%d/%d %s',
+					gmdate( 'H:i:s' ),
+					$state['status'] ?? '?',
+					wp_json_encode( $data['data']['exec_alive'] ?? null ),
+					(int) ( $data['data']['stalled_sec'] ?? 0 ),
+					wp_json_encode( $data['data']['can_resume'] ?? null ),
+					(int) ( $state['current_index'] ?? 0 ) + 1,
+					(int) ( $state['current_chunk_done'] ?? 0 ),
+					(int) ( $state['current_step_total_chunks'] ?? 0 ),
+					'error' === ( $state['status'] ?? '' ) ? '| ' . ( $state['crash_reason'] ?? $state['last_message'] ?? '' ) : ''
+				)
+			);
+		}
+
+		/**
+		 * Chiama un handler AJAX reale del controller e stampa la risposta JSON.
+		 *
+		 * ## OPTIONS
+		 *
+		 * <action>
+		 * : Azione da eseguire.
+		 * ---
+		 * options:
+		 *   - start
+		 *   - resume
+		 *   - reset
+		 *   - status
+		 * ---
+		 *
+		 * [--wait-resumable]
+		 * : Prima di chiamare l'azione attende (polling ogni secondo, max 10 minuti) che il pannello
+		 *   renda disponibile "Riprendi". Serve a simulare due click simultanei da due processi.
+		 *
+		 * ## EXAMPLES
+		 *
+		 *     wp mvd-dev ajax resume
+		 *
+		 * @param array<int, string>    $args       Argomenti posizionali: azione.
+		 * @param array<string, string> $assoc_args Opzioni.
+		 * @return void
+		 */
+		public function ajax( array $args, array $assoc_args ): void {
+			$map    = [
+				'start'  => [ 'ajaxStart', 'mvd_wai_ctrl_start' ],
+				'resume' => [ 'ajaxResume', 'mvd_wai_ctrl_resume' ],
+				'reset'  => [ 'ajaxReset', 'mvd_wai_ctrl_reset' ],
+				'status' => [ 'ajaxStatus', 'mvd_wai_ctrl_status' ],
+			];
+			$action = $args[0] ?? '';
+			if ( ! isset( $map[ $action ] ) ) {
+				WP_CLI::error( 'Azione non valida.' );
+			}
+
+			if ( isset( $assoc_args['wait-resumable'] ) ) {
+				$deadline = time() + 600;
+				do {
+					wp_cache_flush();
+					$status = $this->callAjax( [ 'MvdWaiCtrlPlugin', 'ajaxStatus' ], 'mvd_wai_ctrl_status' );
+					if ( ! empty( $status['data']['can_resume'] ) ) {
+						break;
+					}
+					sleep( 1 );
+				} while ( time() < $deadline );
+				wp_cache_flush();
+			}
+
+			$data = $this->callAjax( [ 'MvdWaiCtrlPlugin', $map[ $action ][0] ], $map[ $action ][1] );
+			WP_CLI::log( sprintf( '%s [pid %d] %s: %s', gmdate( 'H:i:s' ), getmypid(), $action, wp_json_encode( $data ) ) );
+		}
+
+		/**
+		 * Porta lo stato in errore senza toccare il blocco in esecuzione.
+		 *
+		 * Simula un falso crash del watchdog delle versioni precedenti (o lo stato visto da
+		 * un'altra scheda), per verificare che Riprendi e Avvia vengano rifiutati a blocco vivo.
+		 *
+		 * @subcommand fake-crash
+		 *
+		 * @return void
+		 */
+		public function fake_crash(): void {
+			$state                 = MvdWaiCtrlState::get();
+			$state['status']       = 'error';
+			$state['crash_reason'] = 'Falso crash simulato (mvd-dev)';
+			MvdWaiCtrlState::save( $state );
+			WP_CLI::success( 'Stato forzato a error. Lock di esecuzione: ' . ( MvdWaiCtrlRunner::isExecLockFree() ? 'libero' : 'OCCUPATO' ) );
+		}
+
+		/**
+		 * Riporta lo stato a running (dopo fake-crash) mantenendo catena e posizione.
+		 *
+		 * @subcommand unfake-crash
+		 *
+		 * @return void
+		 */
+		public function unfake_crash(): void {
+			$state                 = MvdWaiCtrlState::get();
+			$state['status']       = 'running';
+			$state['crash_reason'] = null;
+			MvdWaiCtrlState::save( $state );
+			WP_CLI::success( 'Stato riportato a running.' );
+		}
+
+		/**
+		 * Preme "Riprendi" chiamando il vero handler ajaxResume.
+		 *
+		 * @return void
+		 */
+		public function resume(): void {
+			$data = $this->callAjax( [ 'MvdWaiCtrlPlugin', 'ajaxResume' ], 'mvd_wai_ctrl_resume' );
+			WP_CLI::log( gmdate( 'H:i:s' ) . ' resume: ' . wp_json_encode( $data ) );
+		}
+
+		/**
+		 * Invoca un handler AJAX del controller con utente admin e nonce valido, catturando il JSON.
+		 *
+		 * @param callable $handler      Handler da eseguire (es. ajaxStatus).
+		 * @param string   $nonce_action Azione del nonce verificato dall'handler.
+		 * @return array<string, mixed>  Risposta JSON decodificata.
+		 */
+		private function callAjax( callable $handler, string $nonce_action ): array {
+			$admins = get_users( [ 'role' => 'administrator', 'number' => 1, 'fields' => 'ID' ] );
+			wp_set_current_user( (int) ( $admins[0] ?? 1 ) );
+			$_REQUEST['_ajax_nonce'] = wp_create_nonce( $nonce_action );
+
+			// wp_send_json_*() termina con wp_die(): in AJAX il gestore lancia un'eccezione invece di uscire.
+			add_filter( 'wp_doing_ajax', '__return_true' );
+			$die_handler = static function () {
+				return static function (): void {
+					throw new \RuntimeException( 'mvd-dev-ajax-done' );
+				};
+			};
+			add_filter( 'wp_die_ajax_handler', $die_handler );
+
+			ob_start();
+			try {
+				call_user_func( $handler );
+			} catch ( \RuntimeException $e ) {
+				if ( 'mvd-dev-ajax-done' !== $e->getMessage() ) {
+					ob_end_clean();
+					throw $e;
+				}
+			}
+			$output = (string) ob_get_clean();
+
+			remove_filter( 'wp_die_ajax_handler', $die_handler );
+			remove_filter( 'wp_doing_ajax', '__return_true' );
+
+			$decoded = json_decode( $output, true );
+			return is_array( $decoded ) ? $decoded : [ 'raw' => $output ];
 		}
 
 		/**

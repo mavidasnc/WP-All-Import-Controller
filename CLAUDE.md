@@ -166,6 +166,10 @@ npx wp-env run cli wp mvd-dev setup --records=20 --per-request=2   # varianti
 | `setup [--records=N] [--per-request=N] [--time-limit=S]` | Rigenera feed e import di test, imposta il limite per blocco di WPAI (default 20 s, come staging), spegne il simulatore |
 | `start` | Avvia la catena come il pulsante "Avvia" (senza nonce) |
 | `status [--lines=N]` | Stato del controller, lock, ultima attività, flag PMXI, coda del log su file |
+| `poll` | Esegue una volta il polling del pannello (`ajaxStatus`, watchdog incluso) |
+| `watch [--start] [--auto-resume] [--interval=S] [--duration=S]` | Polling in loop con un solo bootstrap (su Docker per Windows ogni comando WP-CLI impiega ~60 s solo per avviarsi) |
+| `ajax start\|resume\|reset\|status [--wait-resumable]` | Chiama i veri handler AJAX con nonce e utente admin |
+| `fake-crash` / `unfake-crash` | Porta lo stato in `error` (e ritorno) senza toccare il blocco in esecuzione: simula il falso crash del vecchio watchdog |
 | `sim --record-delay=S` | Ogni record salvato attende S secondi (blocchi lunghi) |
 | `sim --after-import-delay=S` | `pmxi_after_xml_import` attende S secondi (come la sostituzione varianti del tema) |
 | `sim --kill-after-records=N` | Il processo dell'hop viene ucciso con SIGKILL dopo N record (monouso) |
