@@ -3,7 +3,7 @@ Contributors: mavidasnc
 Tags: wp-all-import, import, automation, woocommerce, cron
 Requires at least: 6.0
 Tested up to: 6.9.4
-Stable tag: 1.6.0
+Stable tag: 1.7.0
 Requires PHP: 8.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -19,6 +19,19 @@ Esegue le importazioni WP All Import Pro in sequenza con un solo click dal panne
 **Requisiti runtime:** WordPress >= 6.0, PHP >= 8.1, WP All Import Pro >= 5.0.
 
 == Changelog ==
+
+= 1.7.0 - 2026-11-25 =
+
+**Added:**
+* **Ripresa automatica dei blocchi morti.** Quando un blocco viene terminato (su SiteGround le richieste HTTP vengono chiuse a ~120 s senza errori PHP), il watchdog rileva la catena ferma — lock di esecuzione libero e nessuna attività da `MVD_WAI_CTRL_WATCHDOG_THRESHOLD` secondi — e la riprende da solo, senza click su "Riprendi". Massimo `MVD_WAI_CTRL_AUTO_RESUME_MAX` (3) tentativi consecutivi sulla stessa posizione; se la catena avanza nel frattempo il conteggio riparte. Esauriti i tentativi il run va in errore e resta disponibile la ripresa manuale.
+* **Dimezzamento dei record per richiesta** dell'import a ogni ripresa automatica (minimo 1), salvato nelle opzioni dell'import: è lo stesso comportamento di WP All Import nei lanci manuali dal suo pannello (`failures` → `records_per_request` dimezzato). Disattivabile con `MVD_WAI_CTRL_AUTO_HALVE_RECORDS` o con il filtro `mvd_wai_ctrl_auto_halve_records`.
+* **Watchdog anche da WP-Cron**: evento `mvd_wai_ctrl_watchdog` ogni minuto durante un run (si cancella da solo a catena ferma), così la catena si ripara anche senza la pagina admin aperta.
+* Nuova classe `MvdWaiCtrlWatchdog` (controllo, ripresa automatica, ripresa condivisa con "Riprendi"); filtri `mvd_wai_ctrl_auto_resume_max` e `mvd_wai_ctrl_auto_halve_records`; costanti `MVD_WAI_CTRL_AUTO_RESUME_MAX` e `MVD_WAI_CTRL_AUTO_HALVE_RECORDS`, sovrascrivibili in `wp-config.php`.
+
+**Changed:**
+* `ajaxStatus()` e `ajaxResume()` usano la logica comune di `MvdWaiCtrlWatchdog`; la ripresa manuale azzera il contatore delle riprese automatiche.
+* La disattivazione e la disinstallazione del plugin rimuovono anche l'evento WP-Cron del watchdog.
+
 
 = 1.6.0 - 2026-11-25 =
 

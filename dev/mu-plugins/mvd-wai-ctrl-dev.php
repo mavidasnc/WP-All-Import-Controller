@@ -302,6 +302,9 @@ if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			}
 			$run_id = MvdWaiCtrlLogger::createRun();
 			MvdWaiCtrlState::startRun( $run_id );
+			if ( class_exists( 'MvdWaiCtrlWatchdog' ) ) {
+				MvdWaiCtrlWatchdog::ensureScheduled();
+			}
 			MvdWaiCtrlRunner::scheduleSelf();
 			WP_CLI::success( sprintf( 'Run %d avviato.', $run_id ) );
 		}

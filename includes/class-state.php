@@ -48,6 +48,8 @@ class MvdWaiCtrlState {
 			'crash_reason'              => null,   // messaggio popolato da watchdog o shutdown handler
 			'current_step_history_log_id' => 0,   // ID del record wp_pmxi_history per lo step corrente
 			'chain_id'                  => '',    // identificativo della catena di hop valida (rigenerato a start/resume)
+			'auto_resume_count'         => 0,     // riprese automatiche consecutive sulla stessa posizione
+			'auto_resume_position'      => '',    // posizione ('indice:record') dell'ultima ripresa automatica
 		];
 	}
 
@@ -286,10 +288,14 @@ class MvdWaiCtrlState {
 	 * Imposta resuming=true in modo che il prossimo runStep salti il reset
 	 * dei counter PMXI, consentendo la ripresa dal queue_chunk_number salvato.
 	 *
+	 * @param string $message Messaggio da mostrare come ultimo messaggio ('' = invariato).
 	 * @return void
 	 */
-	public static function markResumeRequested(): void {
+	public static function markResumeRequested( string $message = '' ): void {
 		$state                 = self::get();
+		if ( '' !== $message ) {
+			$state['last_message'] = $message;
+		}
 		$state['status']       = 'running';
 		$state['resuming']     = true;
 		$state['crash_reason'] = null;
@@ -297,6 +303,52 @@ class MvdWaiCtrlState {
 		// Nuova catena: eventuali hop della catena precedente ancora in volo verranno scartati.
 		$state['chain_id']     = self::newChainId();
 		self::save( $state );
+	}
+
+	/**
+	 * Registra un tentativo di ripresa automatica e ne restituisce il numero progressivo.
+	 *
+	 * Il conteggio riparte da 1 se la posizione è cambiata rispetto all'ultima ripresa
+	 * automatica (la catena ha fatto progressi nel frattempo).
+	 *
+	 * @param string $position Posizione corrente nel formato 'indice_import:record_elaborati'.
+	 * @return int             Numero del tentativo (1 = primo tentativo su questa posizione).
+	 */
+	public static function nextAutoResumeAttempt( string $position ): int {
+		$state = self::get();
+		$count = ( $position === (string) $state['auto_resume_position'] ) ? (int) $state['auto_resume_count'] + 1 : 1;
+
+		$state['auto_resume_count']    = $count;
+		$state['auto_resume_position'] = $position;
+		self::save( $state );
+
+		return $count;
+	}
+
+	/**
+	 * Azzera il contatore delle riprese automatiche (es. dopo una ripresa manuale).
+	 *
+	 * @return void
+	 */
+	public static function resetAutoResume(): void {
+		$state                         = self::get();
+		$state['auto_resume_count']    = 0;
+		$state['auto_resume_position'] = '';
+		self::save( $state );
+	}
+
+	/**
+	 * Svuota la cache in memoria delle option del controller, per rileggerle dal database.
+	 *
+	 * Serve quando un'altra richiesta può averle modificate durante quella corrente
+	 * (es. watchdog che rilegge lo stato dopo aver preso il lock di controllo).
+	 *
+	 * @return void
+	 */
+	public static function flushCache(): void {
+		wp_cache_delete( MVD_WAI_CTRL_STATE_OPTION, 'options' );
+		wp_cache_delete( self::HEARTBEAT_OPTION, 'options' );
+		wp_cache_delete( 'notoptions', 'options' );
 	}
 
 	/**

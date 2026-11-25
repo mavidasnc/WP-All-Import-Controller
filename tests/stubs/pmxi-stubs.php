@@ -27,6 +27,9 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 		public int    $count            = 0;
 		public int    $processing       = 0;
 
+		/** @var array<string, mixed> Opzioni dell'import (records_per_request, ...). */
+		public array  $options          = [];
+
 		/** @var array<string, mixed> */
 		public array $errors = [];
 
@@ -106,6 +109,7 @@ if ( ! class_exists( 'PMXI_Import_Record' ) ) {
 			$this->friendly_name  = (string) ( $config['friendly_name'] ?? '' );
 			$this->execute_throws = $config['execute_throws']            ?? null;
 			$this->execute_return = $config['execute_return']            ?? null;
+			$this->options        = (array) ( $config['options']         ?? [] );
 
 			// Salva i risultati post-execute separatamente: execute() li applicherà
 			// dopo che il runner ha chiamato set() per azzerare i counter.

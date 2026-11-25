@@ -26,6 +26,8 @@ defined( 'DAY_IN_SECONDS' )    || define( 'DAY_IN_SECONDS',    86400 );
 // Nuove costanti del plugin per error handling e log.
 define( 'MVD_WAI_CTRL_WATCHDOG_THRESHOLD', 180 );
 define( 'MVD_WAI_CTRL_SLOW_THRESHOLD',     600 );
+define( 'MVD_WAI_CTRL_AUTO_RESUME_MAX',    3 );
+define( 'MVD_WAI_CTRL_AUTO_HALVE_RECORDS', true );
 define( 'MVD_WAI_CTRL_LOG_DIR',            'mvd-wai-ctrl-logs' );
 define( 'MVD_WAI_CTRL_LOG_RETENTION_DAYS', 30 );
 
@@ -42,3 +44,4 @@ require_once dirname( __DIR__ ) . '/includes/class-state.php';
 require_once dirname( __DIR__ ) . '/includes/class-logger.php';
 require_once dirname( __DIR__ ) . '/includes/class-runner.php';
 require_once dirname( __DIR__ ) . '/includes/class-plugin.php';
+require_once dirname( __DIR__ ) . '/includes/class-watchdog.php';

@@ -123,6 +123,8 @@ class PluginTest extends TestCase {
 		Functions\when( 'get_transient' )->justReturn( false );
 		Functions\when( 'current_time' )->justReturn( '2024-01-01 00:00:00' );
 		Functions\when( 'update_option' )->justReturn( true );
+		// Il watchdog WP-Cron risulta già pianificato.
+		Functions\when( 'wp_next_scheduled' )->justReturn( time() + 60 );
 
 		// $wpdb per Logger::createRun().
 		global $wpdb;
@@ -186,14 +188,19 @@ class PluginTest extends TestCase {
 		Functions\when( 'check_ajax_referer' )->justReturn( true );
 		Functions\when( 'current_user_can' )->justReturn( true );
 
-		// Stato: running con heartbeat più vecchio di 180s.
+		// Stato: running con heartbeat più vecchio di 180s e riprese automatiche già esaurite
+		// sulla stessa posizione (0:0): il watchdog deve segnare la catena come interrotta.
 		$old_updated_at = time() - 200;
 		Functions\when( 'get_option' )->justReturn( [
-			'status'        => 'running',
-			'updated_at'    => $old_updated_at,
-			'run_id'        => 99,
-			'current_index' => 0,
+			'status'               => 'running',
+			'updated_at'           => $old_updated_at,
+			'run_id'               => 99,
+			'current_index'        => 0,
+			'current_chunk_done'   => 0,
+			'auto_resume_position' => '0:0',
+			'auto_resume_count'    => MVD_WAI_CTRL_AUTO_RESUME_MAX,
 		] );
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
 
 		// Nessun lock attivo → watchdog può scattare.
 		Functions\when( 'get_transient' )->justReturn( false );

@@ -18,6 +18,7 @@ $wpdb->query( 'DROP TABLE IF EXISTS ' . $wpdb->prefix . 'mvd_wai_ctrl_log' );
 delete_option( 'mvd_wai_ctrl_state' );
 delete_option( 'mvd_wai_ctrl_db_version' );
 delete_option( 'mvd_wai_ctrl_heartbeat' );
+wp_clear_scheduled_hook( 'mvd_wai_ctrl_watchdog' );
 delete_transient( 'mvd_wai_ctrl_running_lock' );
 
 // Rimuove la cartella dei log.

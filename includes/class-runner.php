@@ -564,6 +564,38 @@ class MvdWaiCtrlRunner {
 	}
 
 	/**
+	 * Dimezza i record per richiesta di un import WP All Import (minimo 1), come fa
+	 * WP All Import stesso quando un'iterazione manuale fallisce.
+	 *
+	 * Il valore viene salvato nelle opzioni dell'import, così i blocchi successivi
+	 * restano più brevi anche nei run futuri.
+	 *
+	 * @param int $import_id ID dell'import.
+	 * @return array{before: int, after: int}|null Valori prima/dopo, null se l'import non esiste.
+	 */
+	public static function halveRecordsPerRequest( int $import_id ): ?array {
+		if ( ! class_exists( 'PMXI_Import_Record' ) ) {
+			return null;
+		}
+		$import = new PMXI_Import_Record();
+		$import->getById( $import_id );
+		if ( $import->isEmpty() ) {
+			return null;
+		}
+		$options = (array) $import->options;
+		$before  = max( 1, (int) ( $options['records_per_request'] ?? 1 ) );
+		$after   = max( 1, (int) ceil( $before / 2 ) );
+		if ( $after !== $before ) {
+			$options['records_per_request'] = $after;
+			$import->set( [ 'options' => $options ] )->update();
+		}
+		return [
+			'before' => $before,
+			'after'  => $after,
+		];
+	}
+
+	/**
 	 * Schedula il prossimo step via loopback admin-ajax (path primario) con
 	 * fallback su wp_schedule_single_event + spawn_cron.
 	 *

@@ -21,6 +21,8 @@ Definite in `mvd-wp-all-import-controller.php`:
 | `MVD_WAI_CTRL_CAPABILITY` | `manage_options` |
 | `MVD_WAI_CTRL_WATCHDOG_THRESHOLD` | `180` — secondi senza attività, **a lock di esecuzione libero**, prima che il watchdog dichiari la catena interrotta |
 | `MVD_WAI_CTRL_SLOW_THRESHOLD` | `600` — secondi senza record salvati, a blocco vivo, prima di segnalarlo come lento in UI (`stalled_sec`) |
+| `MVD_WAI_CTRL_AUTO_RESUME_MAX` | `3` — riprese automatiche consecutive sulla stessa posizione (0 = disattivate). Sovrascrivibile in `wp-config.php` |
+| `MVD_WAI_CTRL_AUTO_HALVE_RECORDS` | `true` — dimezza `records_per_request` dell'import a ogni ripresa automatica (come WP All Import nei lanci manuali) |
 | `MVD_WAI_CTRL_LOG_DIR` | `mvd-wai-ctrl-logs` — sottocartella di `wp-content/uploads/` per i file log |
 | `MVD_WAI_CTRL_LOG_RETENTION_DAYS` | `30` — giorni di conservazione dei file log |
 
@@ -55,6 +57,9 @@ Processa **un singolo chunk** di un singolo import per invocazione. Logica di `r
 
 `forceStopPmxiCron(int $import_id)`: query diretta su `{prefix}pmxi_imports` per azzerare `triggered/processing/executing` prima di un resume.
 
+**`MvdWaiCtrlWatchdog`** (`includes/class-watchdog.php`, dalla 1.7.0)
+`check()`: se la catena è morta (stato `running`, lock di esecuzione libero, ultima attività oltre `WATCHDOG_THRESHOLD`) prende il lock di controllo, rilegge lo stato e la **riprende automaticamente** (`performResume()`), dimezzando i `records_per_request` dell'import (`Runner::halveRecordsPerRequest()`), fino a `MVD_WAI_CTRL_AUTO_RESUME_MAX` tentativi sulla stessa posizione `indice:record` (`State::nextAutoResumeAttempt()`); poi segna il run `crashed`. Gira dentro `ajaxStatus()` e da WP-Cron (`mvd_wai_ctrl_watchdog`, ogni minuto, pianificato da start/resume con `ensureScheduled()`, auto-rimosso a catena ferma). `performResume()` è condiviso con "Riprendi" manuale (che azzera il contatore con `State::resetAutoResume()`). Filtri: `mvd_wai_ctrl_auto_resume_max`, `mvd_wai_ctrl_auto_halve_records`.
+
 **`MvdWaiCtrlLogger`** (`includes/class-logger.php`)
 Due sistemi di log paralleli:
 - **Tabella DB** `{prefix}mvd_wai_ctrl_log`: `createRun()` → `run_id`, `appendStep()`, `closeRun()`, `markRunCrashed()`, `getRecentRuns($limit)`.
@@ -74,6 +79,7 @@ Wrapper sull'option `mvd_wai_ctrl_state`. Campi chiave dello stato:
 | `resuming` | bool | `true` → il prossimo `runStep()` salta il reset counter PMXI |
 | `crash_reason` | string\|null | Popolato da watchdog o shutdown handler |
 | `chain_id` | string | Catena di hop valida, rigenerata a start/resume. `''` negli stati creati da versioni < 1.6.0 |
+| `auto_resume_count` / `auto_resume_position` | int / string | Riprese automatiche consecutive e posizione `indice:record` a cui si riferiscono |
 | `current_step_history_log_id` | int | ID del record `wp_pmxi_history` per lo step corrente |
 
 **`MvdWaiCtrlAdminPage`** (`includes/class-admin-page.php`)
@@ -103,7 +109,8 @@ Polling (admin.js ogni 3 sec)
 Crash recovery
   → shutdown handler PHP → markRunCrashed() + writeFile('FATAL') + markCrashed()
   → watchdog in ajaxStatus() → markRunCrashed() + writeFile('ERROR') + markCrashed()
-  → utente clicca "Riprendi" (disponibile solo a lock libero) → ajaxResume() → forceStopPmxiCron() + nuovo chain_id + scheduleSelf()
+  → watchdog (ajaxStatus o WP-Cron ogni minuto) → Watchdog::check(): blocco morto → ripresa automatica (max 3 sulla stessa posizione, records_per_request dimezzati) → oltre il limite markCrashed()
+  → utente clicca "Riprendi" (disponibile solo a lock libero) → ajaxResume() → Watchdog::performResume(): forceStopPmxiCron() + nuovo chain_id + scheduleSelf()
 ```
 
 Il loopback è la via primaria perché garantisce `is_admin() = true`, necessario affinché WP All Import Pro carichi `PMXI_Import_Record` (classe admin-only). 1 richiesta HTTP per chunk risolve anche il bug del singleton `WPAI_WPML` che non resettava `$language_code` tra import consecutivi.
