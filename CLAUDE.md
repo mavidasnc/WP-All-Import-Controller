@@ -139,13 +139,47 @@ Il workflow `.github/workflows/release.yml` verifica che `readme.txt` sia in sin
 
 ## Ambiente locale wp-env
 
+Allineato a staging: WordPress 7.1.4, PHP 8.3, WooCommerce 11.2.1, WP All Import Pro 6.0.4 + add-on WooCommerce 4.0.8. Dati di test sintetici.
+
+**File:**
+- `.wp-env.json` (versionato): core, PHP, plugin pubblici, mapping di `dev/`.
+- `.wp-env.override.json` (**non versionato**, locale): aggiunge WP All Import Pro e l'add-on WooCommerce dai percorsi della copia locale del sito (`C:/Users/Davide/Siti/www.endscuoio.com/public/plugins/...`). Sono plugin a licenza: non vanno nel repository.
+- `dev/mu-plugins/mvd-wai-ctrl-dev.php`: mu-plugin di sviluppo. Riscrive i loopback verso `localhost:8888` sull'host interno del container (altrimenti `scheduleSelf()` e `spawn_cron()` falliscono in silenzio dentro Docker), simula record lenti e processi uccisi, aggiunge i comandi `wp mvd-dev`.
+- Feed XML generati: `wp-content/uploads/mvd-dev-feeds/` nel container (WPAI accetta solo percorsi dentro uploads).
+- `dev/`, `package.json`, `.wp-env*.json` sono esclusi dallo zip di release (`release.yml`).
+
+**Primo avvio:**
 ```bash
-npx wp-env start    # dev su :8888
-npx wp-env stop
-npx wp-env run cli wp plugin list
+npm install
+npm run env:start          # http://localhost:8888/wp-admin  (admin / password)
+```
+Poi, una volta sola: in **All Import → Settings → Licenses** attivare la chiave di WP All Import Pro (senza licenza la Pro 6.x rifiuta di eseguire gli import).
+```bash
+npm run env:setup          # = wp mvd-dev setup: feed + import 13, 2, 1, 14 (40 prodotti, 4 per richiesta)
+npx wp-env run cli wp mvd-dev setup --records=20 --per-request=2   # varianti
 ```
 
-Assicurarsi che nel `.wp-env.json` siano mappati anche WP All Import Pro e le sue dipendenze come plugin aggiuntivi.
+**Comandi `wp mvd-dev`** (via `npx wp-env run cli wp mvd-dev ...`):
+
+| Comando | Effetto |
+|---|---|
+| `setup [--records=N] [--per-request=N] [--time-limit=S]` | Rigenera feed e import di test, imposta il limite per blocco di WPAI (default 20 s, come staging), spegne il simulatore |
+| `start` | Avvia la catena come il pulsante "Avvia" (senza nonce) |
+| `status [--lines=N]` | Stato del controller, lock, ultima attività, flag PMXI, coda del log su file |
+| `sim --record-delay=S` | Ogni record salvato attende S secondi (blocchi lunghi) |
+| `sim --after-import-delay=S` | `pmxi_after_xml_import` attende S secondi (come la sostituzione varianti del tema) |
+| `sim --kill-after-records=N` | Il processo dell'hop viene ucciso con SIGKILL dopo N record (monouso) |
+| `sim --clear` | Spegne il simulatore |
+
+**Scenari di verifica della 1.6.0:**
+1. *Blocco lungo vivo*: `sim --record-delay=60`, avviare. Dopo 3 minuti il pannello non deve mostrare "Catena interrotta" né "Riprendi"; `status` mostra lock OCCUPATO. Oltre 10 minuti senza record compare l'avviso "blocco in esecuzione".
+2. *Processo ucciso*: `sim --kill-after-records=2`, avviare. Il lock si libera subito; dopo 180 s il watchdog (pannello aperto) segna la catena interrotta; "Riprendi" riparte dal record dove si era fermato.
+3. *Resume rifiutato*: con `--record-delay=60`, chiamare "Riprendi" o "Avvia" mentre un blocco gira → 409.
+4. *Doppio click*: due "Riprendi" ravvicinati → una sola catena (log: un solo `runStep START` per volta).
+5. *Fine import lenta*: `sim --after-import-delay=240` → nessun falso crash durante la fase finale.
+6. *Esito WPAI ≠ 200*: svuotare un feed in `uploads/mvd-dev-feeds/` (nessun `<product>`) → passo `warning`, la catena prosegue.
+
+Log: `wp-content/uploads/mvd-wai-ctrl-logs/` (righe START/END/SKIP con PID) e `npm run env:logs` (`debug.log`).
 
 ## Text domain e i18n
 

@@ -26,3 +26,6 @@ Thumbs.db
 
 # Cartella di debug locale
 /debug/
+
+# Ambiente wp-env locale
+/.wp-env.override.json

@@ -54,6 +54,11 @@ jobs:
             --exclude='phpunit.xml.dist' \
             --exclude='phpstan.neon.dist' \
             --exclude='.wp-env.json' \
+            --exclude='.wp-env.override.json' \
+            --exclude='/dev' \
+            --exclude='/node_modules' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
             --exclude='*.zip' \
             ./ "/tmp/${PLUGIN_SLUG}/"
 

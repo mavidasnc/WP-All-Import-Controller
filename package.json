@@ -1,0 +1,16 @@
+{
+	"name": "mvd-wp-all-import-controller",
+	"private": true,
+	"description": "Ambiente di sviluppo locale (wp-env) per MVD WP All Import Controller.",
+	"scripts": {
+		"env:start": "wp-env start",
+		"env:stop": "wp-env stop",
+		"env:destroy": "wp-env destroy",
+		"env:setup": "wp-env run cli wp mvd-dev setup",
+		"env:status": "wp-env run cli wp mvd-dev status",
+		"env:logs": "wp-env run cli tail -n 50 wp-content/debug.log"
+	},
+	"devDependencies": {
+		"@wordpress/env": "12.2.0"
+	}
+}
