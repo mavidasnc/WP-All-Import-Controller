@@ -94,7 +94,8 @@ class RunnerResumeAndStatusTest extends TestCase {
 		$this->assertSame( 1, $this->saved_state['current_index'] );
 	}
 
-	public function test_non_200_status_on_completed_import_is_logged_as_warning_and_chain_continues(): void {
+	public function test_empty_feed_is_logged_as_success_and_chain_continues(): void {
+		// current_index 2 = import ID 1 in MVD_WAI_CTRL_IDS: il messaggio WPAI riporta "#1".
 		\PMXI_Import_Record::configureStub(
 			[
 				[
@@ -103,6 +104,57 @@ class RunnerResumeAndStatusTest extends TestCase {
 					'execute_return'     => [
 						'status'  => 500,
 						'message' => '#1 No matching elements found for Root element and XPath expression specified',
+					],
+				],
+			]
+		);
+		$this->bootState( [ 'current_index' => 2 ] );
+
+		$inserted = [];
+		$wpdb     = $this->createWpdbMock();
+		$wpdb->shouldReceive( 'insert' )->andReturnUsing(
+			function ( $table, $data ) use ( &$inserted ) {
+				$inserted[] = $data;
+				return 1;
+			}
+		);
+		$wpdb->shouldReceive( 'update' )->never(); // closeRun non deve essere chiamato.
+
+		\MvdWaiCtrlRunner::runStep();
+
+		$this->assertCount( 1, $inserted );
+		$this->assertSame( 'success', $inserted[0]['outcome'], (string) $inserted[0]['message'] );
+		$this->assertStringContainsString( 'Nessun record da importare', $inserted[0]['message'] );
+		$this->assertStringNotContainsString( 'status 500', $inserted[0]['message'] );
+		$this->assertSame( 3, $this->saved_state['current_index'], 'La catena deve proseguire con l\'import successivo.' );
+		$this->assertSame( 'running', $this->saved_state['status'] );
+	}
+
+	public function test_is_empty_feed_result_matches_only_wpai_empty_feed_message(): void {
+		Functions\when( '__' )->returnArg();
+		Functions\when( 'wp_strip_all_tags' )->alias( 'strip_tags' );
+
+		$empty = [
+			'status'  => 500,
+			'message' => '#14 No matching elements found for Root element and XPath expression specified',
+		];
+		$this->assertTrue( \MvdWaiCtrlRunner::isEmptyFeedResult( $empty, 14 ) );
+		// Messaggio di un altro import, status diverso, altro testo o risultato normale: non è un feed vuoto.
+		$this->assertFalse( \MvdWaiCtrlRunner::isEmptyFeedResult( $empty, 2 ) );
+		$this->assertFalse( \MvdWaiCtrlRunner::isEmptyFeedResult( array_merge( $empty, [ 'status' => 403 ] ), 14 ) );
+		$this->assertFalse( \MvdWaiCtrlRunner::isEmptyFeedResult( [ 'status' => 500, 'message' => 'Upload failed' ], 14 ) );
+		$this->assertFalse( \MvdWaiCtrlRunner::isEmptyFeedResult( new \stdClass(), 14 ) );
+	}
+
+	public function test_non_200_status_on_completed_import_is_logged_as_warning_and_chain_continues(): void {
+		\PMXI_Import_Record::configureStub(
+			[
+				[
+					'empty'              => false,
+					'queue_chunk_number' => 0,
+					'execute_return'     => [
+						'status'  => 500,
+						'message' => 'Source file not found',
 					],
 				],
 			]

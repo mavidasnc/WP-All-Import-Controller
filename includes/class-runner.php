@@ -377,7 +377,9 @@ class MvdWaiCtrlRunner {
 
 			// execute() restituisce un array status/message quando PMXI si ferma senza elaborare
 			// (feed vuoto, "No matching elements", upload fallito, rifiuto licenza).
-			$exec_warning = self::extractExecuteWarning( $exec_result );
+			// Il file senza record per questo import non è un avviso: l'import è concluso, non c'era nulla da fare.
+			$empty_feed   = self::isEmptyFeedResult( $exec_result, $import_id );
+			$exec_warning = $empty_feed ? null : self::extractExecuteWarning( $exec_result );
 
 			MvdWaiCtrlLogger::writeFile(
 				null === $exec_warning ? 'INFO' : 'WARNING',
@@ -391,7 +393,7 @@ class MvdWaiCtrlRunner {
 						'count'        => $count,
 						'duration_sec' => time() - $step_start,
 						'peak_mb'      => round( memory_get_peak_usage( true ) / 1048576, 1 ),
-						'wpai_status'  => $exec_warning,
+						'wpai_status'  => $empty_feed ? 'nessun record nel file' : $exec_warning,
 					],
 					static fn( $v ): bool => null !== $v
 				)
@@ -432,7 +434,10 @@ class MvdWaiCtrlRunner {
 					? self::secondsSinceLocal( $step_started_at )
 					: time() - $step_start;
 				$step_message = implode( "\n", array_slice( $log_messages, -50 ) );
-				if ( null !== $exec_warning ) {
+				if ( $empty_feed ) {
+					$step_message = __( 'Nessun record da importare: il file non contiene elementi per questo import. Se ti aspettavi dei record, controlla il feed.', 'mvd-wai-ctrl' )
+						. ( '' !== $step_message ? "\n" . $step_message : '' );
+				} elseif ( null !== $exec_warning ) {
 					$step_message = sprintf(
 						/* translators: %s: messaggio restituito da WP All Import */
 						__( 'WP All Import non ha elaborato record: %s', 'mvd-wai-ctrl' ),
@@ -668,6 +673,36 @@ class MvdWaiCtrlRunner {
 			$message = implode( ' | ', array_map( 'strval', $message ) );
 		}
 		return sprintf( 'status %d: %s', $status, wp_strip_all_tags( (string) $message ) );
+	}
+
+	/**
+	 * Indica se execute() si è fermato perché il file non contiene record per questo import.
+	 *
+	 * PMXI restituisce status 500 con "#ID No matching elements found for Root element and XPath
+	 * expression specified" quando il file non ha nessun elemento che corrisponde alla radice e al
+	 * filtro XPath (es. feed vuoto, o nessun prodotto semplice nel feed). In quel caso azzera i
+	 * contatori e chiude l'import: non è un errore, non c'era nulla da importare.
+	 *
+	 * @param mixed $exec_result Valore restituito da execute().
+	 * @param int   $import_id   ID dell'import eseguito.
+	 * @return bool              True se il file non conteneva record da importare.
+	 */
+	public static function isEmptyFeedResult( $exec_result, int $import_id ): bool {
+		if ( ! is_array( $exec_result ) || 500 !== (int) ( $exec_result['status'] ?? 0 ) ) {
+			return false;
+		}
+		$message = $exec_result['message'] ?? '';
+		if ( ! is_string( $message ) ) {
+			return false;
+		}
+		$message = trim( wp_strip_all_tags( $message ) );
+
+		// Testo originale di WPAI (inglese) e, se il sito è tradotto, la sua versione tradotta.
+		$english = 'No matching elements found for Root element and XPath expression specified';
+		// phpcs:ignore WordPress.WP.I18n.TextDomainMismatch -- stringa di WP All Import, confrontata con il suo messaggio.
+		$translated = sprintf( __( '#%s No matching elements found for Root element and XPath expression specified', 'wp-all-import-pro' ), $import_id );
+
+		return $message === $translated || $message === '#' . $import_id . ' ' . $english;
 	}
 
 	/**
