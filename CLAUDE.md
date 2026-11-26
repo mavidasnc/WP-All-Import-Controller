@@ -198,7 +198,7 @@ npx wp-env run cli wp mvd-dev setup --records=20 --per-request=2   # varianti
 3. *Resume rifiutato*: con `--record-delay=60`, chiamare "Riprendi" o "Avvia" mentre un blocco gira → 409.
 4. *Doppio click*: due "Riprendi" ravvicinati → una sola catena (log: un solo `runStep START` per volta).
 5. *Fine import lenta*: `sim --after-import-delay=240` → nessun falso crash durante la fase finale.
-6. *Esito WPAI ≠ 200*: svuotare un feed in `uploads/mvd-dev-feeds/` (nessun `<product>`) → passo `warning`, la catena prosegue.
+6. *Feed senza record*: svuotare un feed in `uploads/mvd-dev-feeds/` (nessun `<product>`) → passo `success` con "Nessun record da importare", la catena prosegue (dalla 1.8.1; prima era `warning`). Gli altri esiti WPAI ≠ 200 a import concluso restano `warning`.
 
 Log: `wp-content/uploads/mvd-wai-ctrl-logs/` (righe START/END/SKIP con PID) e `npm run env:logs` (`debug.log`).
 
