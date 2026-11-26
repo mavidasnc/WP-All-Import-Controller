@@ -37,6 +37,9 @@ class MvdWaiCtrlPlugin {
 		// Watchdog anche da WP-Cron (ogni minuto durante un run), indipendente dalla pagina admin aperta.
 		MvdWaiCtrlWatchdog::register();
 
+		// Ricollegamento WPML delle varianti a fine import (e comando WP-CLI di riparazione).
+		MvdWaiCtrlVariationLinker::register();
+
 	}
 
 	/**
