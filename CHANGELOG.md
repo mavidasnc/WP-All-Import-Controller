@@ -6,6 +6,8 @@ Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-26
+
 ### Changed
 - **Import con file senza record: ora è un passo riuscito, non un avviso.** WP All Import restituisce status 500 con "#ID No matching elements found for Root element and XPath expression specified" quando il file non contiene elementi per l'import, ad esempio un feed vuoto o nessun prodotto semplice nel feed. Il passo veniva segnato `warning` con "WP All Import non ha elaborato record: status 500…" e sembrava un errore. Ora è `success` con il messaggio "Nessun record da importare". Gli altri status diversi da 200 restano avvisi. Nuovo metodo `MvdWaiCtrlRunner::isEmptyFeedResult()`.
 
