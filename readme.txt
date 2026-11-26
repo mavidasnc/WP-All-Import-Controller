@@ -3,7 +3,7 @@ Contributors: mavidasnc
 Tags: wp-all-import, import, automation, woocommerce, cron
 Requires at least: 6.0
 Tested up to: 6.9.4
-Stable tag: 1.8.0
+Stable tag: 1.8.1
 Requires PHP: 8.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -19,6 +19,12 @@ Esegue le importazioni WP All Import Pro in sequenza con un solo click dal panne
 **Requisiti runtime:** WordPress >= 6.0, PHP >= 8.1, WP All Import Pro >= 5.0.
 
 == Changelog ==
+
+= 1.8.1 - 2026-11-26 =
+
+**Changed:**
+* **Import con file senza record: ora è un passo riuscito, non un avviso.** WP All Import restituisce status 500 con "#ID No matching elements found for Root element and XPath expression specified" quando il file non contiene elementi per l'import, ad esempio un feed vuoto o nessun prodotto semplice nel feed. Il passo veniva segnato `warning` con "WP All Import non ha elaborato record: status 500…" e sembrava un errore. Ora è `success` con il messaggio "Nessun record da importare". Gli altri status diversi da 200 restano avvisi. Nuovo metodo `MvdWaiCtrlRunner::isEmptyFeedResult()`.
+
 
 = 1.8.0 - 2026-11-26 =
 
