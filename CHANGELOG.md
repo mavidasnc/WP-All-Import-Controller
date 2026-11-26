@@ -6,6 +6,21 @@ Versionamento basato su [SemVer](https://semver.org/lang/it/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-26
+
+### Fixed
+- **Varianti EN/IT scollegate in WPML dopo l'import.** WPML All Import collega ogni record alla sua traduzione con il tipo dell'import (`post_product`) anche quando il record è una variante. WPML scrive allora una riga spuria `post_product` nella trid della variante originale, e la riga reale `post_product_variation` resta da sola: per WPML la variante IT diventa un contenuto "originale" in italiano. Su staging4 erano 4.322 coppie. Conseguenze: il selettore di lingua non portava alla variante corrispondente e WCML non sincronizzava le varianti tra le lingue.
+
+### Added
+- Nuova classe `MvdWaiCtrlVariationLinker`. Su `pmxi_after_xml_import` (priorità 50, dopo la sostituzione varianti del tema) ricollega le varianti dell'import appena concluso alle varianti dell'import sorgente indicato nelle impostazioni WPML All Import. Le regole di abbinamento sono:
+  - stessa `unique_key` in `pmxi_posts`;
+  - stesso SKU;
+  - padri già tradotti l'uno dell'altro;
+  - nessuna traduzione già presente sulla variante sorgente.
+
+  La classe aggiorna anche il meta WCML `_wcml_duplicate_of_variation` e rimuove le righe spurie `post_product` sulle varianti. Agisce solo sugli import collegati a un import sorgente; ignora le anteprime.
+- Comando WP-CLI `wp mvd-wai-ctrl link-variations --import=<id> [--dry-run] [--report=<file.csv>]` per la riparazione una tantum. Il report CSV elenca le varianti non collegate con il motivo: `no_twin`, `sku_mismatch`, `duplicate_sku`, `parent_not_linked`, `source_already_translated`, `missing_translation` e altri.
+
 ## [1.7.0] - 2026-11-25
 
 ### Added

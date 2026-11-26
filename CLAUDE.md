@@ -60,6 +60,16 @@ Processa **un singolo chunk** di un singolo import per invocazione. Logica di `r
 **`MvdWaiCtrlWatchdog`** (`includes/class-watchdog.php`, dalla 1.7.0)
 `check()`: se la catena è morta (stato `running`, lock di esecuzione libero, ultima attività oltre `WATCHDOG_THRESHOLD`) prende il lock di controllo, rilegge lo stato e la **riprende automaticamente** (`performResume()`), dimezzando i `records_per_request` dell'import (`Runner::halveRecordsPerRequest()`), fino a `MVD_WAI_CTRL_AUTO_RESUME_MAX` tentativi sulla stessa posizione `indice:record` (`State::nextAutoResumeAttempt()`); poi segna il run `crashed`. Gira dentro `ajaxStatus()` e da WP-Cron (`mvd_wai_ctrl_watchdog`, ogni minuto, pianificato da start/resume con `ensureScheduled()`, auto-rimosso a catena ferma). `performResume()` è condiviso con "Riprendi" manuale (che azzera il contatore con `State::resetAutoResume()`). Filtri: `mvd_wai_ctrl_auto_resume_max`, `mvd_wai_ctrl_auto_halve_records`.
 
+**`MvdWaiCtrlVariationLinker`** (`includes/class-variation-linker.php`, dalla 1.8.0)
+Ricollega in WPML le varianti importate. WPML All Import collega le varianti con il tipo `post_product` invece di `post_product_variation`, quindi le varianti tradotte restano "originali" scollegate.
+- `onAfterImport()` è agganciato a `pmxi_after_xml_import` con priorità 50, dopo `mvd_variation_replace_run` del tema (10) e prima del restore (999). Esegue `linkImport()` sull'import appena concluso. Agisce solo se le opzioni `wpml_addon` hanno `lng`, `import` (import sorgente) e `matching_logic`.
+- `buildLinkPlan()` è una funzione pura e testata. Abbina per `unique_key` di `pmxi_posts`, SKU uguale, SKU non duplicato nel padre, padri nella stessa trid `post_product` e sorgente senza traduzione nella lingua target.
+- L'esecuzione:
+  - elimina le righe spurie `post_product` sulle varianti;
+  - chiama `wpml_set_element_language_details` con `post_product_variation`;
+  - scrive `_wcml_duplicate_of_variation`.
+- WP-CLI: `wp mvd-wai-ctrl link-variations --import=<id> [--dry-run] [--report=<file.csv>]`.
+
 **`MvdWaiCtrlLogger`** (`includes/class-logger.php`)
 Due sistemi di log paralleli:
 - **Tabella DB** `{prefix}mvd_wai_ctrl_log`: `createRun()` → `run_id`, `appendStep()`, `closeRun()`, `markRunCrashed()`, `getRecentRuns($limit)`.

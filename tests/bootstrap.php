@@ -38,6 +38,7 @@ require_once dirname( __DIR__ ) . '/vendor/autoload.php';
 require_once __DIR__ . '/stubs/wpdb-stub.php';
 require_once __DIR__ . '/stubs/pmxi-stubs.php';
 require_once __DIR__ . '/stubs/pmxi-history-record.php';
+require_once __DIR__ . '/stubs/wp-cli-stub.php';
 
 // Carica le classi del plugin (esclude il file principale che richiede ABSPATH WP completo).
 require_once dirname( __DIR__ ) . '/includes/class-state.php';
@@ -45,3 +46,4 @@ require_once dirname( __DIR__ ) . '/includes/class-logger.php';
 require_once dirname( __DIR__ ) . '/includes/class-runner.php';
 require_once dirname( __DIR__ ) . '/includes/class-plugin.php';
 require_once dirname( __DIR__ ) . '/includes/class-watchdog.php';
+require_once dirname( __DIR__ ) . '/includes/class-variation-linker.php';
